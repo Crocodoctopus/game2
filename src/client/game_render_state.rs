@@ -349,6 +349,8 @@ impl GameRenderState {
                 let mut bg_tile_uv = Vec::with_capacity(4 * max_tiles);
                 let mut bg_mask_uv = Vec::with_capacity(4 * max_tiles);
 
+                use crate::shared::*;
+                let tile_texture_property_lookup = &crate::shared::TILE_TEXTURE_PROPERTIES;
                 for y in 1..game_frame.tiles_h - 1 {
                     'x: for x in 1..game_frame.tiles_w - 1 {
                         let index = x + y * game_frame.tiles_w;
@@ -356,96 +358,157 @@ impl GameRenderState {
                         // Fill FG.
                         'skip_fg: {
                             let tile = game_frame.fg_tiles[index];
-                            if tile == 0 {
+                            let tile_texture_property = tile_texture_property_lookup[tile as usize];
+
+                            let u = tile_texture_property.u;
+                            let v = tile_texture_property.v;
+
+                            // If not visible, skip.
+                            if (u, v) == (0., 0.) {
                                 break 'skip_fg;
                             }
 
+                            let x = 16. * (x + game_frame.tiles_x) as f32;
+                            let y = 16. * (y + game_frame.tiles_y) as f32;
+                            let z = tile_texture_property.depth as f32;
+
                             // Fill vertex data.
-                            let tx = 16. * (x + game_frame.tiles_x) as f32;
-                            let ty = 16. * (y + game_frame.tiles_y) as f32;
                             #[rustfmt::skip]
                             fg_tile_xyz.extend_from_slice(&[
-                                Vec3::new(tx - 8.,       ty - 8.,       tile as f32),
-                                Vec3::new(tx + 16. + 8., ty - 8.,       tile as f32),
-                                Vec3::new(tx + 16. + 8., ty + 16. + 8., tile as f32),
-                                Vec3::new(tx - 8.,       ty + 16. + 8., tile as f32), ]);
+                                Vec3::new(x - 8.,       y - 8.,       z),
+                                Vec3::new(x + 16. + 8., y - 8.,       z),
+                                Vec3::new(x + 16. + 8., y + 16. + 8., z),
+                                Vec3::new(x - 8.,       y + 16. + 8., z), ]);
 
                             // Fill uv data.
-                            let tx = 16. * tile as f32;
                             #[rustfmt::skip]
                             fg_tile_uv.extend_from_slice(&[
-                                Vec2::new(tx,       0. ),
-                                Vec2::new(16. + tx, 0. ),
-                                Vec2::new(16. + tx, 16.),
-                                Vec2::new(0. + tx,  16.), ]);
+                                Vec2::new(u,       v      ),
+                                Vec2::new(u + 16., v      ),
+                                Vec2::new(u + 16., v + 16.),
+                                Vec2::new(u,       v + 16.), ]);
 
                             // Fill mask uv data.
-                            let tw = game_frame.tiles_w;
-                            let t0 = ((tile > game_frame.fg_tiles[index - tw]) as u8) << 0;
-                            let t1 = ((tile > game_frame.fg_tiles[index - tw + 1]) as u8) << 1;
-                            let t2 = ((tile > game_frame.fg_tiles[index + 1]) as u8) << 2;
-                            let t3 = ((tile > game_frame.fg_tiles[index + tw + 1]) as u8) << 3;
-                            let u = ((t0 | t1 | t2 | t3) << 2) as f32;
-                            let t4 = ((tile > game_frame.fg_tiles[index + tw]) as u8) << 0;
-                            let t5 = ((tile > game_frame.fg_tiles[index + tw - 1]) as u8) << 1;
-                            let t6 = ((tile > game_frame.fg_tiles[index - 1]) as u8) << 2;
-                            let t7 = ((tile > game_frame.fg_tiles[index - tw - 1]) as u8) << 3;
-                            let v = ((t4 | t5 | t6 | t7) << 2) as f32;
+                            let stride = game_frame.tiles_w;
+                            let depth = tile_texture_property.depth;
+
+                            let cnst = [
+                                index - stride,
+                                index - stride + 1,
+                                index + 1,
+                                index + stride + 1,
+                            ];
+                            let mu = cnst
+                                .into_iter()
+                                .rev()
+                                .map(|index| game_frame.fg_tiles[index])
+                                .map(|tile| tile_texture_property_lookup[tile as usize].depth)
+                                .map(|dep| (depth > dep) as u8)
+                                .reduce(|acc, bit| (acc << 1) | bit)
+                                .unwrap()
+                                << 2;
+                            let cnst = [
+                                index + stride,
+                                index + stride - 1,
+                                index - 1,
+                                index - stride - 1,
+                            ];
+                            let mv = cnst
+                                .into_iter()
+                                .rev()
+                                .map(|index| game_frame.fg_tiles[index])
+                                .map(|tile| tile_texture_property_lookup[tile as usize].depth)
+                                .map(|dep| (depth > dep) as u8)
+                                .reduce(|acc, bit| (acc << 1) | bit)
+                                .unwrap()
+                                << 2;
+                            let (mask_u, mask_v) = (mu as f32, mv as f32);
+
                             #[rustfmt::skip]
                             fg_mask_uv.extend_from_slice(&[
-                                Vec2::new(u,      v     ),
-                                Vec2::new(u + 4., v     ),
-                                Vec2::new(u + 4., v + 4.),
-                                Vec2::new(u,      v + 4.), ]);
+                                Vec2::new(mask_u,      mask_v     ),
+                                Vec2::new(mask_u + 4., mask_v     ),
+                                Vec2::new(mask_u + 4., mask_v + 4.),
+                                Vec2::new(mask_u,      mask_v + 4.), ]);
 
                             // Skip check bg tile.
                             continue 'x;
                         }
 
-                        // Fill BG.
                         'skip_bg: {
                             let tile = game_frame.bg_tiles[index];
-                            if tile == 0 {
+                            let tile_texture_property = tile_texture_property_lookup[tile as usize];
+
+                            let u = tile_texture_property.u;
+                            let v = tile_texture_property.v;
+
+                            // If not visible, skip.
+                            if (u, v) == (0., 0.) {
                                 break 'skip_bg;
                             }
 
+                            let x = 16. * (x + game_frame.tiles_x) as f32;
+                            let y = 16. * (y + game_frame.tiles_y) as f32;
+                            let z = tile_texture_property.depth as f32;
+
                             // Fill vertex data.
-                            let tx = 16. * (x + game_frame.tiles_x) as f32;
-                            let ty = 16. * (y + game_frame.tiles_y) as f32;
                             #[rustfmt::skip]
                             bg_tile_xyz.extend_from_slice(&[
-                                Vec3::new(tx - 8.,       ty - 8.,       tile as f32),
-                                Vec3::new(tx + 16. + 8., ty - 8.,       tile as f32),
-                                Vec3::new(tx + 16. + 8., ty + 16. + 8., tile as f32),
-                                Vec3::new(tx - 8.,       ty + 16. + 8., tile as f32), ]);
+                                Vec3::new(x - 8.,       y - 8.,       z),
+                                Vec3::new(x + 16. + 8., y - 8.,       z),
+                                Vec3::new(x + 16. + 8., y + 16. + 8., z),
+                                Vec3::new(x - 8.,       y + 16. + 8., z), ]);
 
                             // Fill uv data.
-                            let tx = 16. * tile as f32;
                             #[rustfmt::skip]
                             bg_tile_uv.extend_from_slice(&[
-                                Vec2::new(tx,       0. ),
-                                Vec2::new(16. + tx, 0. ),
-                                Vec2::new(16. + tx, 16.),
-                                Vec2::new(0. + tx,  16.), ]);
+                                Vec2::new(u,       v      ),
+                                Vec2::new(u + 16., v      ),
+                                Vec2::new(u + 16., v + 16.),
+                                Vec2::new(u,       v + 16.), ]);
 
                             // Fill mask uv data.
-                            let tw = game_frame.tiles_w;
-                            let t0 = ((tile > game_frame.bg_tiles[index - tw]) as u8) << 0;
-                            let t1 = ((tile > game_frame.bg_tiles[index - tw + 1]) as u8) << 1;
-                            let t2 = ((tile > game_frame.bg_tiles[index + 1]) as u8) << 2;
-                            let t3 = ((tile > game_frame.bg_tiles[index + tw + 1]) as u8) << 3;
-                            let u = ((t0 | t1 | t2 | t3) << 2) as f32;
-                            let t4 = ((tile > game_frame.bg_tiles[index + tw]) as u8) << 0;
-                            let t5 = ((tile > game_frame.bg_tiles[index + tw - 1]) as u8) << 1;
-                            let t6 = ((tile > game_frame.bg_tiles[index - 1]) as u8) << 2;
-                            let t7 = ((tile > game_frame.bg_tiles[index - tw - 1]) as u8) << 3;
-                            let v = ((t4 | t5 | t6 | t7) << 2) as f32;
+                            let stride = game_frame.tiles_w;
+                            let depth = tile_texture_property.depth;
+
+                            let cnst = [
+                                index - stride,
+                                index - stride + 1,
+                                index + 1,
+                                index + stride + 1,
+                            ];
+                            let mu = cnst
+                                .into_iter()
+                                .rev()
+                                .map(|index| game_frame.bg_tiles[index])
+                                .map(|tile| tile_texture_property_lookup[tile as usize].depth)
+                                .map(|dep| (depth > dep) as u8)
+                                .reduce(|acc, bit| (acc << 1) | bit)
+                                .unwrap()
+                                << 2;
+                            let cnst = [
+                                index + stride,
+                                index + stride - 1,
+                                index - 1,
+                                index - stride - 1,
+                            ];
+                            let mv = cnst
+                                .into_iter()
+                                .rev()
+                                .map(|index| game_frame.bg_tiles[index])
+                                .map(|tile| tile_texture_property_lookup[tile as usize].depth)
+                                .map(|dep| (depth > dep) as u8)
+                                .reduce(|acc, bit| (acc << 1) | bit)
+                                .unwrap()
+                                << 2;
+                            let (mask_u, mask_v) = (mu as f32, mv as f32);
+
                             #[rustfmt::skip]
                             bg_mask_uv.extend_from_slice(&[
-                                Vec2::new(u,      v     ),
-                                Vec2::new(u + 4., v     ),
-                                Vec2::new(u + 4., v + 4.),
-                                Vec2::new(u,      v + 4.), ]);
+                                Vec2::new(mask_u,      mask_v     ),
+                                Vec2::new(mask_u + 4., mask_v     ),
+                                Vec2::new(mask_u + 4., mask_v + 4.),
+                                Vec2::new(mask_u,      mask_v + 4.), ]); 
                         }
                     }
                 }
@@ -526,11 +589,13 @@ impl GameRenderState {
                     rgb[3 * i + 1] = game_frame.g_channel[i];
                     rgb[3 * i + 2] = game_frame.b_channel[i];
                 }
-                gl::BindTexture(gl::TEXTURE_2D, self.light_tex);
+                gl::BindTexture(gl::TEXTURE_RECTANGLE, self.light_tex);
                 //.gl::PixelStorei(gl::UNPACK_ALIGNMENT, 4);
-                gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RGB8UI as GLint, game_frame.light_w as GLint, game_frame.light_h as GLint, 0, gl::RGB_INTEGER, gl::UNSIGNED_BYTE, rgb.as_ptr() as *const GLvoid);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as GLint);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as GLint);
+                gl::TexImage2D(gl::TEXTURE_RECTANGLE, 0, gl::RGB8UI as GLint, game_frame.light_w as GLint, game_frame.light_h as GLint, 0, gl::RGB_INTEGER, gl::UNSIGNED_BYTE, rgb.as_ptr() as *const GLvoid);
+                //gl::TexParameteri(gl::TEXTURE_RECTANGLE, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as GLint);
+                //gl::TexParameteri(gl::TEXTURE_RECTANGLE, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as GLint);
+                gl::TexParameteri(gl::TEXTURE_RECTANGLE, gl::TEXTURE_MIN_FILTER, gl::NEAREST as GLint);
+                gl::TexParameteri(gl::TEXTURE_RECTANGLE, gl::TEXTURE_MAG_FILTER, gl::NEAREST as GLint);
 
                 let xy = [
                     Vec2::new(game_frame.light_x as f32 * 16.,                        game_frame.light_y as f32 * 16.                       ),
@@ -551,7 +616,7 @@ impl GameRenderState {
                 gl::BlendFunc(gl::DST_COLOR, gl::ZERO);
 
                 gl::ActiveTexture(gl::TEXTURE0 + 0);
-                gl::BindTexture(gl::TEXTURE_2D, self.light_tex);
+                gl::BindTexture(gl::TEXTURE_RECTANGLE, self.light_tex);
 
                 gl::BindVertexArray(self.light_vao);
                 gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.quad_ibo);

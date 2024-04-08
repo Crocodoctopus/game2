@@ -1,3 +1,5 @@
+use crate::shared::Tile;
+
 pub struct GameFrame {
     // Viewport.
     pub viewport_x: f32,
@@ -19,6 +21,6 @@ pub struct GameFrame {
     pub tiles_y: usize,
     pub tiles_w: usize,
     pub tiles_h: usize,
-    pub fg_tiles: Box<[u8]>,
-    pub bg_tiles: Box<[u8]>,
+    pub fg_tiles: Box<[Tile]>,
+    pub bg_tiles: Box<[Tile]>,
 }

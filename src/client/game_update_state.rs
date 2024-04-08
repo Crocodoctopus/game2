@@ -1,58 +1,91 @@
 use crate::client::GameFrame;
+use crate::shared::{Tile, TILE_LIGHT_PROPERTIES};
 use crate::InputEvent;
 use std::path::Path;
 
 pub struct GameUpdateState {
+    //Input.
+    mouse_x: usize,
+    mouse_y: usize,
+    mouse_x_rel: usize,
+    mouse_y_rel: usize,
+    //
+    left_queue: usize,
+    right_queue: usize,
+    jump_queue: usize,
+
+    // Viewport.
+    viewport_x: usize,
+    viewport_y: usize,
+    viewport_w: usize,
+    viewport_h: usize,
+
+    // Tiles.
     world_w: usize,
     world_h: usize,
-    fg_tiles: Vec<u8>,
-    bg_tiles: Vec<u8>,
+    fg_tiles: Box<[Tile]>,
+    bg_tiles: Box<[Tile]>,
+    // Humanoids.
+    //player_id: usize,
+    //humanoid: Vec<Humanoids>,
 }
 
 impl GameUpdateState {
     pub fn new(root: &'static Path) -> Self {
         let world_w = 8400;
         let world_h = 2400;
-        let mut fg_tiles = vec![0u8; world_w * world_h];
-        let mut bg_tiles = vec![0u8; world_w * world_h];
+        let mut fg_tiles = vec![Tile::None; world_w * world_h].into_boxed_slice();
+        let mut bg_tiles = vec![Tile::None; world_w * world_h].into_boxed_slice();
         for y in 0..world_h {
             for x in 0..world_w {
                 let index = x + y * world_w;
 
-                if (x % 4 == 0 && y % 4 == 0) {
-                    continue;
-                }
-
-                fg_tiles[index] = 1;
-                bg_tiles[index] = 1;
                 if y == 0 || y == world_h - 1 || x == 0 || x == world_w - 1 {
+                    fg_tiles[index] = Tile::Dirt;
+                    bg_tiles[index] = Tile::Dirt;
                     continue;
                 }
 
-                fg_tiles[index] = 3;
-                bg_tiles[index] = 3;
-
-                if y > 30 {
+                if y < 20 {
+                    fg_tiles[index] = Tile::None;
+                    bg_tiles[index] = Tile::None;
                     continue;
                 }
-                fg_tiles[index] = 2;
-                bg_tiles[index] = 2;
 
-                if y > 20 {
+                if y < 25 {
+                    fg_tiles[index] = Tile::Dirt;
+                    bg_tiles[index] = Tile::Dirt;
                     continue;
                 }
-                fg_tiles[index] = 1;
-                bg_tiles[index] = 1;
 
-                if y > 16 {
+                if y < 30 {
+                    fg_tiles[index] = Tile::Stone;
+                    bg_tiles[index] = Tile::Stone;
                     continue;
                 }
-                fg_tiles[index] = 0;
-                bg_tiles[index] = 0;
+
+                fg_tiles[index] = Tile::DenseStone;
+                bg_tiles[index] = Tile::DenseStone;
             }
         }
 
         Self {
+            // Input.
+            mouse_x: 0,
+            mouse_y: 0,
+            mouse_x_rel: 0,
+            mouse_y_rel: 0,
+            //
+            left_queue: 0,
+            right_queue: 0,
+            jump_queue: 0,
+
+            // Viewport.
+            viewport_x: 32,
+            viewport_y: 32,
+            viewport_w: 1280,
+            viewport_h: 720,
+
             world_w,
             world_h,
             fg_tiles,
@@ -61,15 +94,69 @@ impl GameUpdateState {
     }
 
     pub fn prestep(&mut self, ts: u64, input_events: impl Iterator<Item = InputEvent>) -> bool {
+        let shift = |queue: &mut _| *queue = *queue << 1 | *queue & !1;
+        shift(&mut self.right_queue);
+        shift(&mut self.left_queue);
+        shift(&mut self.jump_queue);
+
         for e in input_events {
+            use crate::window::*;
             match e {
                 InputEvent::KeyboardInput {
                     keycode,
                     press_state,
                 } => {
+                    let bit = match press_state {
+                        PressState::Up => 0,
+                        PressState::Down => 1,
+                        PressState::DownRepeat => 1,
+                    };
+                    match keycode {
+                        'D' => self.right_queue = self.right_queue & !1 | bit,
+                        'A' => self.left_queue = self.left_queue & !1 | bit,
+                        '1' if bit == 0 => {
+                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
+                            self.fg_tiles[index] = Tile::RedTorch;
+                        }
+                        '2' if bit == 0 => {
+                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
+                            self.fg_tiles[index] = Tile::GreenTorch;
+                        }
+                        '3' if bit == 0 => {
+                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
+                            self.fg_tiles[index] = Tile::BlueTorch;
+                        }
+                        _ => {}
+                    };
                     println!("{keycode:?} {press_state:?}")
                 }
-                _ => {}
+
+                InputEvent::MouseMove { x, y } => {
+                    self.mouse_x_rel = (x * self.viewport_w as f32) as usize;
+                    self.mouse_y_rel = (y * self.viewport_h as f32) as usize;
+                    self.mouse_x = self.viewport_x + self.mouse_x_rel;
+                    self.mouse_y = self.viewport_y + self.mouse_y_rel;
+                }
+
+                InputEvent::MouseClick {
+                    mouse_button,
+                    press_state,
+                } => {
+                    println!("{mouse_button:?}, {press_state:?}");
+                    match (mouse_button, press_state) {
+                        (MouseButton::Left | MouseButton::Right, PressState::Down) => {
+                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
+                            match mouse_button {
+                                MouseButton::Left => self.fg_tiles[index] = Tile::None,
+                                MouseButton::Right => self.bg_tiles[index] = Tile::None,
+                                _ => unreachable!(),
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                InputEvent::WindowClose => return false,
             }
         }
 
@@ -79,18 +166,16 @@ impl GameUpdateState {
     pub fn step(&mut self, ts: u64, ft: u64) {}
 
     pub fn poststep(&mut self, ts: u64) -> GameFrame {
-        let viewport_x = 32_usize;
-        let viewport_y = 32_usize;
-        let viewport_w = 1920_usize;
-        let viewport_h = 1080_usize;
-
         // Lighting
         let (light_x, light_y, light_w, light_h, r_channel, g_channel, b_channel) = {
+            // Light lookup.
+            let tile_light_property_map = &TILE_LIGHT_PROPERTIES;
+
             // Calculate visible region.
-            let x1 = (viewport_x / 16).saturating_sub(LIGHT_MAX as usize);
-            let y1 = (viewport_y / 16).saturating_sub(LIGHT_MAX as usize);
-            let x2 = (viewport_x + viewport_w + 15) / 16 + LIGHT_MAX as usize;
-            let y2 = (viewport_y + viewport_h + 15) / 16 + LIGHT_MAX as usize;
+            let x1 = (self.viewport_x / 16).saturating_sub(LIGHT_MAX as usize);
+            let y1 = (self.viewport_y / 16).saturating_sub(LIGHT_MAX as usize);
+            let x2 = (self.viewport_x + self.viewport_w + 15) / 16 + LIGHT_MAX as usize;
+            let y2 = (self.viewport_y + self.viewport_h + 15) / 16 + LIGHT_MAX as usize;
             let (w, h) = (x2 - x1, y2 - y1);
 
             use crate::light::*;
@@ -110,20 +195,45 @@ impl GameUpdateState {
                     let fg_tile = self.fg_tiles[world_index];
                     let bg_tile = self.bg_tiles[world_index];
 
-                    match (fg_tile, bg_tile) {
-                        // Daylight
-                        (0, 0) => {
-                            r_channel[light_index] = LIGHT_MAX;
-                            g_channel[light_index] = LIGHT_MAX;
-                            b_channel[light_index] = LIGHT_MAX;
+                    // Special case (None, None).
+                    if fg_tile == Tile::None && bg_tile == Tile::None {
+                        r_channel[light_index] = LIGHT_MAX;
+                        g_channel[light_index] = LIGHT_MAX;
+                        b_channel[light_index] = LIGHT_MAX;
+                        r_probes.push(light_index as u16);
+                        g_probes.push(light_index as u16);
+                        b_probes.push(light_index as u16);
+                        continue;
+                    }
+
+                    // Special case (None, Some).
+                    if fg_tile == Tile::None && bg_tile != Tile::None {
+                        fade_map[light_index] = FADE_MIN;
+                        continue;
+                    }
+
+                    // Case (Some, _).
+                    if fg_tile != Tile::None {
+                        let fg_light_property = tile_light_property_map[fg_tile as usize];
+
+                        //
+                        fade_map[light_index] = fg_light_property.fade;
+
+                        //
+                        let (r, g, b) = fg_light_property.light;
+                        if r > 0 {
+                            r_channel[light_index] = r;
                             r_probes.push(light_index as u16);
+                        }
+                        if g > 0 {
+                            g_channel[light_index] = g;
                             g_probes.push(light_index as u16);
+                        }
+                        if b > 0 {
+                            b_channel[light_index] = b;
                             b_probes.push(light_index as u16);
                         }
-                        // Dense FG
-                        (3, _) => fade_map[light_index] = FADE_DENSE,
-                        // Solid FG
-                        (_, _) => fade_map[light_index] = FADE_SOLID,
+                        continue;
                     }
                 }
             }
@@ -137,12 +247,12 @@ impl GameUpdateState {
 
         // Clone the tiles in the visible range (plus 1).
         let (tiles_x, tiles_y, tiles_w, tiles_h, fg_tiles, bg_tiles) = {
-            let x1 = (viewport_x - 4) / 16 - 1;
-            let y1 = (viewport_y - 4) / 16 - 1;
-            let x2 = (viewport_x + viewport_w + 4 + 15) / 16 + 1;
-            let y2 = (viewport_y + viewport_h + 4 + 15) / 16 + 1;
-            let mut fg_tiles = vec![0u8; (x2 - x1) * (y2 - y1)].into_boxed_slice();
-            let mut bg_tiles = vec![0u8; (x2 - x1) * (y2 - y1)].into_boxed_slice();
+            let x1 = (self.viewport_x - 4) / 16 - 1;
+            let y1 = (self.viewport_y - 4) / 16 - 1;
+            let x2 = (self.viewport_x + self.viewport_w + 4 + 15) / 16 + 1;
+            let y2 = (self.viewport_y + self.viewport_h + 4 + 15) / 16 + 1;
+            let mut fg_tiles = vec![Tile::None; (x2 - x1) * (y2 - y1)].into_boxed_slice();
+            let mut bg_tiles = vec![Tile::None; (x2 - x1) * (y2 - y1)].into_boxed_slice();
             let w = x2 - x1;
             let h = y2 - y1;
             for y in 0..h {
@@ -157,10 +267,10 @@ impl GameUpdateState {
         };
 
         GameFrame {
-            viewport_x: 32.,
-            viewport_y: 32.,
-            viewport_w: 1920.,
-            viewport_h: 1080.,
+            viewport_x: self.viewport_x as f32,
+            viewport_y: self.viewport_y as f32,
+            viewport_w: self.viewport_w as f32,
+            viewport_h: self.viewport_h as f32,
 
             light_x,
             light_y,

@@ -1,7 +1,7 @@
-pub const LIGHT_MAX: u8 = 31;
+pub const LIGHT_MAX: u8 = 40;
 pub const FADE_MIN: u8 = 1;
-pub const FADE_SOLID: u8 = 3;
-pub const FADE_DENSE: u8 = 6;
+pub const FADE_SOLID: u8 = 8;
+pub const FADE_DENSE: u8 = 12;
 //  [E][E] [E][E]
 //  [E][0] [1][2]
 //  [E][0] [0][1]
@@ -39,70 +39,44 @@ pub fn fill_light_map(
     fade_map: &Box<[u8]>,
     mut probes: Vec<u16>,
 ) {
+    assert!(light_map.len() == fade_map.len());
+    assert!(light_map.len() > 4);
+    assert!(stride > 2);
+
     // first loop through original probes.
     let mut i = 0;
-    while (i < probes.len()) {
-        /*let index = probes[i];
+    while i < probes.len() {
+        let index = probes[i] as usize;
         i += 1;
-        let brightness = light_map[index as usize];
-        let fade = fade_map[index as usize];
+        assert!(index > stride);
+        assert!(index + stride < light_map.len());
+        let brightness = light_map[index];
+        let fade = fade_map[index];
         let new_brightness = brightness.saturating_sub(fade);
 
-        // Left.
-        let next = (index - 1) as usize;
-        if light_map[next] < new_brightness {
-            light_map[next] = new_brightness;
-            probes.push(next as u16);
+        let offsets = [index - 1, index + 1, index - stride, index + stride];
+        for offset in offsets {
+            if light_map[offset] < new_brightness {
+                light_map[offset] = new_brightness;
+                probes.push(offset as u16);
+            }
         }
-        // Right.
-        let next = (index + 1) as usize;
-        if light_map[next] < new_brightness {
-            light_map[next] = new_brightness;
-            probes.push(next as u16);
-        }
-        // Up.
-        let next = index as usize - stride;
-        if light_map[next] < new_brightness {
-            light_map[next] = new_brightness;
-            probes.push(next as u16);
-        }
-        // Down.
-        let next = index as usize + stride;
-        if light_map[next] < new_brightness {
-            light_map[next] = new_brightness;
-            probes.push(next as u16);
-        }*/
-        unsafe {
-            let index = *probes.get_unchecked(i);
+        /*unsafe {
+            let index = *probes.get_unchecked(i) as usize;
             i += 1;
-            let brightness = *light_map.get_unchecked(index as usize);
-            let fade = *fade_map.get_unchecked(index as usize);
+            //assert!(index > stride);
+            //assert!(index + stride < light_map.len());
+            let brightness = *light_map.get_unchecked(index);
+            let fade = *fade_map.get_unchecked(index);
             let new_brightness = brightness.saturating_sub(fade);
 
-            // Left.
-            let next = (index - 1) as usize;
-            if *light_map.get_unchecked(next) < new_brightness {
-                *light_map.get_unchecked_mut(next) = new_brightness;
-                probes.push(next as u16);
+            let offsets = [index - 1, index + 1, index - stride, index + stride];
+            for offset in offsets {
+                if *light_map.get_unchecked(offset) < new_brightness {
+                    *light_map.get_unchecked_mut(offset) = new_brightness;
+                    probes.push(offset as u16);
+                }
             }
-            // Right.
-            let next = (index + 1) as usize;
-            if *light_map.get_unchecked(next) < new_brightness {
-                *light_map.get_unchecked_mut(next) = new_brightness;
-                probes.push(next as u16);
-            }
-            // Up.
-            let next = index as usize - stride;
-            if *light_map.get_unchecked(next) < new_brightness {
-                *light_map.get_unchecked_mut(next) = new_brightness;
-                probes.push(next as u16);
-            }
-            // Down.
-            let next = index as usize + stride;
-            if *light_map.get_unchecked(next) < new_brightness {
-                *light_map.get_unchecked_mut(next) = new_brightness;
-                probes.push(next as u16);
-            }
-        }
+        }*/
     }
 }

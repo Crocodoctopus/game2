@@ -1,4 +1,4 @@
-use crate::client::{GameFrame, GameRenderState, GameUpdateState};
+use crate::client::{GameRenderState, GameUpdateState};
 use crate::time::*;
 use crate::Window;
 use std::path::Path;
@@ -86,7 +86,7 @@ impl Client {
         self.render_acc += timestamp_as_usecs() - ts;
 
         self.acc_n += 1;
-        if (self.acc_n > 60 * 5) {
+        if self.acc_n > 60 * 5 {
             println!(
                 "Frame: {:.2}ms.\n  Prestep: {:.2}ms.\n  Step: {:.2}ms.\n  Poststep: {:.2}ms.\n  Render: {:.2}ms.",
                 ((self.prestep_acc + self.step_acc + self.poststep_acc + self.render_acc)

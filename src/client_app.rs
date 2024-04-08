@@ -1,6 +1,5 @@
 use crate::client::Client;
 use crate::gl;
-use crate::gl::types::*;
 use crate::server::Server;
 use crate::Window;
 use std::path::Path;

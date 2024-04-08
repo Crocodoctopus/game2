@@ -10,7 +10,7 @@ void main() {
     gl_Position.xyz = view_matrix * vec3(vert_xy, 1.0);
     gl_Position.zw = vec2(1.0, 1.0);
     
-    vec2 uv[4] = {
+    ivec2 uv[4] = {
         { 0, 0 },
         { 1, 0 },
         { 1, 1 },
