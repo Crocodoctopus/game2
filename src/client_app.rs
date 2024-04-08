@@ -1,5 +1,7 @@
 use crate::client::Client;
+#[cfg(feature = "opengl")]
 use crate::gl;
+#[cfg(feature = "opengl")]
 use crate::gl::types::*;
 use crate::server::Server;
 use crate::Window;
@@ -26,22 +28,37 @@ impl ClientApp {
         // Create window.
         let mut window = Window::new(&mut glfw, 1280, 720);
 
-        // Load GL functions.
-        window.gl_load();
+        #[cfg(feature = "opengl")]
+        {
+            // Load GL functions.
+            window.gl_load();
 
-        // Print GPU info.
-        unsafe {
-            use std::ffi::CStr;
-            let vendor = CStr::from_ptr(gl::GetString(gl::VENDOR) as *const i8);
-            let renderer = CStr::from_ptr(gl::GetString(gl::RENDERER) as *const i8);
-            println!("GPU in use: [{vendor:?}] {renderer:?}.");
+            // Print GPU info.
+            unsafe {
+                use std::ffi::CStr;
+                let vendor = CStr::from_ptr(gl::GetString(gl::VENDOR) as *const i8);
+                let renderer = CStr::from_ptr(gl::GetString(gl::RENDERER) as *const i8);
+                println!("GPU in use: [{vendor:?}] {renderer:?}.");
+            }
+        }
+        #[cfg(feature = "wgpu")]
+        {
+            /*
+                window.set_framebuffer_size_polling(true);
+                window.set_key_polling(true);
+                window.set_mouse_button_polling(true);
+                window.make_current();
+             */
+            // Load WGPU.
+
+            //window.
         }
 
         // Initialize server.
         let (server, port) = Server::new(0);
 
         // Initialize client.
-        let client = Client::new(root, port);
+        let client = Client::new(root, port, &mut window);
 
         Self {
             root,

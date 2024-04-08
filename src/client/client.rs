@@ -1,4 +1,8 @@
-use crate::client::{GameFrame, GameRenderState, GameUpdateState};
+use crate::client::{GameFrame, GameUpdateState};
+#[cfg(feature = "opengl")]
+use crate::client::GameRenderState;
+#[cfg(feature = "wgpu")]
+use crate::client::GameRenderStateWgpu as GameRenderState;
 use crate::time::*;
 use crate::Window;
 use std::path::Path;
@@ -13,6 +17,9 @@ pub struct Client {
 
     // Render.
     render_ts: u64,
+    #[cfg(feature = "opengl")]
+    render_state: GameRenderState,
+    #[cfg(feature = "wgpu")]
     render_state: GameRenderState,
 
     // Diagnostic.
@@ -24,7 +31,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(root: &'static Path, server_port: u16) -> Self {
+    pub fn new(root: &'static Path, server_port: u16, window: &mut Window) -> Self {
         Self {
             server_port,
 
@@ -32,13 +39,31 @@ impl Client {
             update_state: GameUpdateState::new(root),
 
             render_ts: crate::timestamp_as_usecs(),
-            render_state: GameRenderState::new(root),
+            render_state: GameRenderState::new(root, window),
 
             acc_n: 0,
             prestep_acc: 0,
             step_acc: 0,
             poststep_acc: 0,
             render_acc: 0,
+        }
+    }
+
+    fn handle_events(&mut self, events: &[crate::InputEvent], window: &mut Window) {
+        for event in events {
+            match event {
+                crate::InputEvent::WindowResize(w, h) => {
+                    #[cfg(feature = "wgpu")]
+                    {
+                        self.render_state.update_surface(window); 
+                        self.render_state.resize((*w, *h));
+                        // TODO: must rerender on mac here!
+                        //self.render_state.render();
+                        //window.swap_buffers();
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -53,6 +78,7 @@ impl Client {
 
         // Get inputs.
         let input_events = window.poll();
+        self.handle_events(&input_events, window);
 
         // Prestep.
         let ts = timestamp_as_usecs();

@@ -5,10 +5,12 @@ mod shared;
 mod time;
 mod window;
 
+#[cfg(feature = "opengl")]
 mod gl {
     include!("gl_460_core.rs");
 }
 
+#[cfg(feature = "opengl")]
 pub use gl::*;
 pub use shared::*;
 pub use time::{timestamp_as_msecs, timestamp_as_secs, timestamp_as_usecs};

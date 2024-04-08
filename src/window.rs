@@ -1,8 +1,9 @@
+#[cfg(feature = "opengl")]
 use crate::gl;
 use glfw::*;
 
 pub struct Window {
-    window: PWindow,
+    pub window: PWindow,
     events: GlfwReceiver<(f64, WindowEvent)>,
 }
 
@@ -18,6 +19,7 @@ impl Window {
         Self { window, events }
     }
 
+    #[cfg(feature = "opengl")]
     pub fn gl_load(&mut self) {
         gl::load_with(|s| self.window.get_proc_address(s) as *const _);
     }
@@ -40,6 +42,9 @@ impl Window {
                         keycode,
                         press_state,
                     }
+                }
+                glfw::WindowEvent::FramebufferSize(width, height) => {
+                    InputEvent::WindowResize(width, height)
                 }
                 _ => InputEvent::WindowClose,
             })
@@ -77,4 +82,5 @@ pub enum InputEvent {
         press_state: PressState,
     },
     WindowClose,
+    WindowResize(i32, i32),
 }
