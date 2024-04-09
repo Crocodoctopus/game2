@@ -41,10 +41,10 @@ var s_mask_sheet: sampler;
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Get texture properties (should this be a uniform?).
     let tile_tex_size: vec2<f32> = vec2<f32>(textureDimensions(t_tile_sheet, 0));
-    let mask_tex_size: vec2<u32> = textureDimensions(t_mask_sheet, 0);
+    let mask_tex_size: vec2<f32> = vec2<f32>(textureDimensions(t_mask_sheet, 0));
 
     // Early discard if mask coevers texture.
-    let mask: f32 = textureSample(t_mask_sheet, s_mask_sheet, in.mask_uv / vec2<f32>(mask_tex_size.x)).r; 
+    let mask: f32 = textureSample(t_mask_sheet, s_mask_sheet, in.mask_uv / mask_tex_size).r; 
     if (mask == 0) {
         discard;
     }
