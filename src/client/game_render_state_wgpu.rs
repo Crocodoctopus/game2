@@ -223,7 +223,7 @@ impl GameRenderStateWgpu {
                 })],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Cw,
                 cull_mode: None,//Some(wgpu::Face::Back),
