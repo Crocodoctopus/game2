@@ -1,4 +1,5 @@
 use crate::client::GameFrame;
+use image::GenericImageView;
 use nalgebra_glm::*;
 use std::path::Path;
 use wgpu::util::DeviceExt;
@@ -64,8 +65,7 @@ pub struct GameRenderStateWgpu {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
 
-    tile_sheet_bind_group: wgpu::BindGroup,
-    mask_sheet_bind_group: wgpu::BindGroup,
+    tile_texture_bind_group: wgpu::BindGroup,
 }
 
 impl GameRenderStateWgpu {
@@ -131,53 +131,14 @@ impl GameRenderStateWgpu {
         };
         surface.configure(&device, &config);
 
-        // texture loading here
-        #[rustfmt::skip]
-        let decode_png_as_rgba = |file: &[u8]| {
-            let mut reader = png::Decoder::new(file).read_info().unwrap();
-            let mut data = vec![0; reader.output_buffer_size()];
-
-            reader.next_frame(&mut data).unwrap();
-            let info = reader.info();
-
-            let palette = info.palette.as_ref().unwrap();
-            let mut rgba = vec![0; 4 * (info.width * info.height) as usize ];
-            for i in 0..(info.width * info.height) as usize {
-                let pindex = data[i] as usize;
-                rgba[4 * i + 0] = palette[3 * pindex + 0];
-                rgba[4 * i + 1] = palette[3 * pindex + 1];
-                rgba[4 * i + 2] = palette[3 * pindex + 2];
-                rgba[4 * i + 3] = 255;
-            }
-
-            (rgba, info.width, info.height)
-        };
-
-        #[rustfmt::skip]
-        let decode_png_as_gray8 = |file: &[u8]| {
-            let mut reader = png::Decoder::new(file).read_info().unwrap();
-            let mut data = vec![0; reader.output_buffer_size()];
-
-            reader.next_frame(&mut data).unwrap();
-            let info = reader.info();
-
-            let palette = info.palette.as_ref().unwrap();
-            let mut rgb = vec![0; (info.width * info.height) as usize ];
-            for i in 0..(info.width * info.height) as usize {
-                let pindex = data[i] as usize;
-                rgb[i] = palette[3 * pindex];
-            }
-
-            (rgb, info.width, info.height)
-        };
-
         let tile_sheet = {
             // Load 
-            let file = include_bytes!("../../resources/tile_sheet.png");
-            let (data, w, h) = decode_png_as_rgba(file);
+            let image = image::load_from_memory(include_bytes!("../../resources/tile_sheet.png")).unwrap();
+            let data = image.as_rgba8().unwrap();
+            let (width, height) = image.dimensions();
             let texture_size = wgpu::Extent3d {
-                width: w,
-                height: h,
+                width,
+                height,
                 depth_or_array_layers: 1,
             };
             let texture = device.create_texture(
@@ -217,23 +178,22 @@ impl GameRenderStateWgpu {
                 // The layout of the texture
                 wgpu::ImageDataLayout {
                     offset: 0,
-                    bytes_per_row: Some(4 * w),
-                    rows_per_image: Some(h),
+                    bytes_per_row: Some(4 * width),
+                    rows_per_image: Some(height),
                 },
                 texture_size,
             );
             texture
         };
 
-
-
         let mask_sheet = {
             // Load 
-            let file = include_bytes!("../../resources/mask_sheet.png");
-            let (data, w, h) = decode_png_as_gray8(file);
+            let image = image::load_from_memory(include_bytes!("../../resources/mask_sheet.png")).unwrap();
+            let (width, height) = image.dimensions();
+            let data = image.into_luma8();
             let texture_size = wgpu::Extent3d {
-                width: w,
-                height: h,
+                width,
+                height,
                 depth_or_array_layers: 1,
             };
             let texture = device.create_texture(
@@ -261,8 +221,8 @@ impl GameRenderStateWgpu {
                 // The layout of the texture
                 wgpu::ImageDataLayout {
                     offset: 0,
-                    bytes_per_row: Some(w),
-                    rows_per_image: Some(h),
+                    bytes_per_row: Some(width),
+                    rows_per_image: Some(height),
                 },
                 texture_size,
             );
@@ -297,6 +257,16 @@ impl GameRenderStateWgpu {
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
                         // This should match the filterable field of the
                         // corresponding Texture entry above.
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
@@ -306,7 +276,7 @@ impl GameRenderStateWgpu {
                 label: Some("texture_bind_group_layout"),
             });
 
-        let tile_sheet_bind_group = device.create_bind_group(
+        let tile_texture_bind_group = device.create_bind_group(
                 &wgpu::BindGroupDescriptor {
                     layout: &texture_bind_group_layout,
                     entries: &[
@@ -316,6 +286,10 @@ impl GameRenderStateWgpu {
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&mask_sheet_texture_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
                             resource: wgpu::BindingResource::Sampler(&texture_sampler),
                         }
                     ],
@@ -323,24 +297,6 @@ impl GameRenderStateWgpu {
                 }
             );
             
-        let mask_sheet_bind_group = device.create_bind_group(
-                &wgpu::BindGroupDescriptor {
-                    layout: &texture_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&mask_sheet_texture_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&texture_sampler),
-                        }
-                    ],
-                    label: Some("mask_sheet_bind_group"),
-                }
-            );
-
-
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/tile.wgsl"));
 
         let camera_uniform = CameraUniform {
@@ -387,7 +343,6 @@ impl GameRenderStateWgpu {
                 label: Some("Render Pipeline Layout"),
                 bind_group_layouts: &[
                     &camera_bind_group_layout,
-                    &texture_bind_group_layout,
                     &texture_bind_group_layout,
                 ],
                 push_constant_ranges: &[],
@@ -477,8 +432,7 @@ impl GameRenderStateWgpu {
             camera_uniform,
             camera_buffer,
             camera_bind_group,
-            tile_sheet_bind_group,
-            mask_sheet_bind_group,
+            tile_texture_bind_group,
         }
     }
 
@@ -802,10 +756,10 @@ impl GameRenderStateWgpu {
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.tile_sheet_bind_group, &[]);
-            render_pass.set_bind_group(2, &self.mask_sheet_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.tile_texture_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
+            assert!(self.num_indices >= vertex_tiles.len() as u32, "Ran out of indices in the IBO!");
             let idx_val = std::cmp::min(self.num_indices, vertex_tiles.len() as u32);
             render_pass.draw_indexed(0..idx_val, 0, 0..1);
         }

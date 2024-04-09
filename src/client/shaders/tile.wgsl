@@ -31,11 +31,9 @@ fn vs_main(
 @group(1) @binding(0)
 var t_tile_sheet: texture_2d<f32>;
 @group(1) @binding(1)
-var s_tile_sheet: sampler;
-@group(2) @binding(0)
 var t_mask_sheet: texture_2d<f32>;
-@group(2) @binding(1)
-var s_mask_sheet: sampler;
+@group(1) @binding(2)
+var tex_sampler: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -44,13 +42,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let mask_tex_size: vec2<f32> = vec2<f32>(textureDimensions(t_mask_sheet));
 
     // Early discard if mask coevers texture.
-    let mask: f32 = textureSample(t_mask_sheet, s_mask_sheet, in.mask_uv / mask_tex_size).r; 
+    let mask: f32 = textureSample(t_mask_sheet, tex_sampler, in.mask_uv / mask_tex_size).r; 
     if (mask == 0) {
         discard;
     }
 
     // Set pixel
-    var rgb: vec3<f32> = textureSample(t_tile_sheet, s_tile_sheet, in.tile_uv / tile_tex_size).rgb;
+    var rgb: vec3<f32> = textureSample(t_tile_sheet, tex_sampler, in.tile_uv / tile_tex_size).rgb;
     if (all(rgb == vec3(1.0, 0.0, 1.0))) {
         discard;
     }
