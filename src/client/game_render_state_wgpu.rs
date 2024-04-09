@@ -52,7 +52,7 @@ impl LightVertex {
 
     const fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<TileVertex>() as wgpu::BufferAddress,
+            array_stride: std::mem::size_of::<LightVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: Self::VAO,
         }
@@ -549,7 +549,7 @@ impl GameRenderStateWgpu {
                 module: &light_shader,
                 entry_point: "vs_main",
                 buffers: &[
-                    TileVertex::desc(),
+                    LightVertex::desc(),
                 ],
             },
             fragment: Some(wgpu::FragmentState {
@@ -557,7 +557,18 @@ impl GameRenderStateWgpu {
                 entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Src,
+                            dst_factor: wgpu::BlendFactor::Zero,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Src,
+                            dst_factor: wgpu::BlendFactor::Zero,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
