@@ -46,6 +46,12 @@ struct CameraUniform {
     view_matrix: [[f32; 4]; 4],
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct TileUniform {
+    mul_rgb: [f32; 3],
+}
+
 pub struct GameRenderStateWgpu {
     instance: wgpu::Instance,
     // pure unsafe hackery
@@ -57,13 +63,18 @@ pub struct GameRenderStateWgpu {
 
     render_pipeline: wgpu::RenderPipeline,
 
-    vertex_buffer: wgpu::Buffer,
+    fg_vertex_buffer: wgpu::Buffer,
+    bg_vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
 
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+
+    tile_uniform: TileUniform,
+    tile_uniform_buffer: wgpu::Buffer,
+    tile_uniform_bind_group: wgpu::BindGroup,
 
     tile_texture_bind_group: wgpu::BindGroup,
 }
@@ -338,12 +349,52 @@ impl GameRenderStateWgpu {
             label: Some("camera_bind_group"),
         });
 
+        let tile_uniform = TileUniform {
+            mul_rgb: [1.0, 1.0, 1.0],
+        };
+
+        let tile_uniform_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Tile Uniform Buffer"),
+                contents: bytemuck::cast_slice(&[tile_uniform]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+
+        let tile_uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some("tile_uniform_bind_group_layout"),
+        });
+
+        let tile_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &tile_uniform_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: tile_uniform_buffer.as_entire_binding(),
+                }
+            ],
+            label: Some("tile_uniform_bind_group"),
+        });
+
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
                 bind_group_layouts: &[
                     &camera_bind_group_layout,
                     &texture_bind_group_layout,
+                    &tile_uniform_bind_group_layout,
                 ],
                 push_constant_ranges: &[],
         });
@@ -400,9 +451,16 @@ impl GameRenderStateWgpu {
 
 
 
-        let vertex_buffer = device.create_buffer_init(
+        let fg_vertex_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
+                label: Some("FG Vertex Buffer"),
+                contents: bytemuck::cast_slice(&vertex_data),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+        let bg_vertex_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("BG Vertex Buffer"),
                 contents: bytemuck::cast_slice(&vertex_data),
                 usage: wgpu::BufferUsages::VERTEX,
             }
@@ -426,12 +484,16 @@ impl GameRenderStateWgpu {
             config,
             size,
             render_pipeline,
-            vertex_buffer,
+            fg_vertex_buffer,
+            bg_vertex_buffer,
             index_buffer,
             num_indices,
             camera_uniform,
             camera_buffer,
             camera_bind_group,
+            tile_uniform,
+            tile_uniform_buffer,
+            tile_uniform_bind_group,
             tile_texture_bind_group,
         }
     }
@@ -474,7 +536,8 @@ impl GameRenderStateWgpu {
 
         // Render tiles.
         let max_tiles = (game_frame.tiles_w - 2) * (game_frame.tiles_h - 2);
-        let mut vertex_tiles = Vec::with_capacity(max_tiles);
+        let mut fg_vertex_tiles = Vec::with_capacity(max_tiles);
+        let mut bg_vertex_tiles = Vec::with_capacity(max_tiles);
         'skip: {
             if max_tiles == 0 {
                 break 'skip;
@@ -482,9 +545,11 @@ impl GameRenderStateWgpu {
 
             // Calculate tile data and upload to GPU.
             let (fg_count, bg_count) = 'calc_tiles: {
+                /*
                 let mut bg_tile_xyz = Vec::with_capacity(4 * max_tiles);
                 let mut bg_tile_uv = Vec::with_capacity(4 * max_tiles);
                 let mut bg_mask_uv = Vec::with_capacity(4 * max_tiles);
+                */
 
                 for y in 1..game_frame.tiles_h - 1 {
                     'x: for x in 1..game_frame.tiles_w - 1 {
@@ -515,22 +580,22 @@ impl GameRenderStateWgpu {
                             let t7 = ((tile > game_frame.fg_tiles[index - tw - 1]) as u8) << 3;
                             let v = ((t4 | t5 | t6 | t7) << 2) as f32;
                             #[rustfmt::skip]
-                            vertex_tiles.push(TileVertex {
+                            fg_vertex_tiles.push(TileVertex {
                                 tile_xyz: [tx - 8.,       ty - 8.,       tile as f32],
                                 tile_uv:  [uv_tx, 0.],
                                 mask_uv:  [u, v],
                             });
-                            vertex_tiles.push(TileVertex {
+                            fg_vertex_tiles.push(TileVertex {
                                 tile_xyz: [tx + 16. + 8., ty - 8.,       tile as f32],
                                 tile_uv:  [16. + uv_tx, 0.],
                                 mask_uv:  [u + 4., v],
                             });
-                            vertex_tiles.push(TileVertex {
+                            fg_vertex_tiles.push(TileVertex {
                                 tile_xyz: [tx + 16. + 8., ty + 16. + 8., tile as f32],
                                 tile_uv:  [16. + uv_tx, 16.],
                                 mask_uv:  [u + 4., v + 4.],
                             });
-                            vertex_tiles.push(TileVertex {
+                            fg_vertex_tiles.push(TileVertex {
                                 tile_xyz: [tx - 8.,       ty + 16. + 8., tile as f32],
                                 tile_uv:  [0. + uv_tx,  16.],
                                 mask_uv:  [u,      v + 4.],
@@ -550,23 +615,8 @@ impl GameRenderStateWgpu {
                             // Fill vertex data.
                             let tx = 16. * (x + game_frame.tiles_x) as f32;
                             let ty = 16. * (y + game_frame.tiles_y) as f32;
-                            #[rustfmt::skip]
-                            bg_tile_xyz.extend_from_slice(&[
-                                Vec3::new(tx - 8.,       ty - 8.,       tile as f32),
-                                Vec3::new(tx + 16. + 8., ty - 8.,       tile as f32),
-                                Vec3::new(tx + 16. + 8., ty + 16. + 8., tile as f32),
-                                Vec3::new(tx - 8.,       ty + 16. + 8., tile as f32), ]);
 
-                            // Fill uv data.
-                            let tx = 16. * tile as f32;
-                            #[rustfmt::skip]
-                            bg_tile_uv.extend_from_slice(&[
-                                Vec2::new(tx,       0. ),
-                                Vec2::new(16. + tx, 0. ),
-                                Vec2::new(16. + tx, 16.),
-                                Vec2::new(0. + tx,  16.), ]);
-
-                            // Fill mask uv data.
+                            let uv_tx = 16. * tile as f32;
                             let tw = game_frame.tiles_w;
                             let t0 = ((tile > game_frame.bg_tiles[index - tw]) as u8) << 0;
                             let t1 = ((tile > game_frame.bg_tiles[index - tw + 1]) as u8) << 1;
@@ -578,12 +628,53 @@ impl GameRenderStateWgpu {
                             let t6 = ((tile > game_frame.bg_tiles[index - 1]) as u8) << 2;
                             let t7 = ((tile > game_frame.bg_tiles[index - tw - 1]) as u8) << 3;
                             let v = ((t4 | t5 | t6 | t7) << 2) as f32;
+                            bg_vertex_tiles.push(TileVertex {
+                                tile_xyz: [tx - 8.,       ty - 8.,       tile as f32],
+                                tile_uv:  [uv_tx, 0.],
+                                mask_uv:  [u, v],
+                            });
+                            bg_vertex_tiles.push(TileVertex {
+                                tile_xyz: [tx + 16. + 8., ty - 8.,       tile as f32],
+                                tile_uv:  [16. + uv_tx, 0.],
+                                mask_uv:  [u + 4., v],
+                            });
+                            bg_vertex_tiles.push(TileVertex {
+                                tile_xyz: [tx + 16. + 8., ty + 16. + 8., tile as f32],
+                                tile_uv:  [16. + uv_tx, 16.],
+                                mask_uv:  [u + 4., v + 4.],
+                            });
+                            bg_vertex_tiles.push(TileVertex {
+                                tile_xyz: [tx - 8.,       ty + 16. + 8., tile as f32],
+                                tile_uv:  [0. + uv_tx,  16.],
+                                mask_uv:  [u,      v + 4.],
+                            });
+                            /*
+                            #[rustfmt::skip]
+                            bg_tile_xyz.extend_from_slice(&[
+                                Vec3::new(tx - 8.,       ty - 8.,       tile as f32),
+                                Vec3::new(tx + 16. + 8., ty - 8.,       tile as f32),
+                                Vec3::new(tx + 16. + 8., ty + 16. + 8., tile as f32),
+                                Vec3::new(tx - 8.,       ty + 16. + 8., tile as f32), ]);
+
+                            // Fill uv data.
+                            #[rustfmt::skip]
+                            bg_tile_uv.extend_from_slice(&[
+                                Vec2::new(uv_tx,       0. ),
+                                Vec2::new(16. + uv_tx, 0. ),
+                                Vec2::new(16. + uv_tx, 16.),
+                                Vec2::new(0. + uv_tx,  16.), ]);
+                                */
+
+                            // Fill mask uv data.
+                            /*
+
                             #[rustfmt::skip]
                             bg_mask_uv.extend_from_slice(&[
                                 Vec2::new(u,      v     ),
                                 Vec2::new(u + 4., v     ),
                                 Vec2::new(u + 4., v + 4.),
                                 Vec2::new(u,      v + 4.), ]);
+                                */
                         }
                     }
                 }
@@ -615,7 +706,7 @@ impl GameRenderStateWgpu {
                 */
 
                 let fg_count = 0;
-                let bg_count = bg_tile_xyz.len();
+                let bg_count = 0; //bg_tile_xyz.len();
                 break 'calc_tiles (fg_count / 4, bg_count / 4)
             };
             /*
@@ -722,11 +813,19 @@ impl GameRenderStateWgpu {
         });
 
         // TODO: test if copying is faster than updating if we care
-        self.vertex_buffer.destroy();
-        self.vertex_buffer = self.device.create_buffer_init(
+        self.fg_vertex_buffer.destroy();
+        self.fg_vertex_buffer = self.device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(&vertex_tiles),
+                label: Some("FG Vertex Buffer"),
+                contents: bytemuck::cast_slice(&fg_vertex_tiles),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+        self.bg_vertex_buffer.destroy();
+        self.bg_vertex_buffer = self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("BG Vertex Buffer"),
+                contents: bytemuck::cast_slice(&bg_vertex_tiles),
                 usage: wgpu::BufferUsages::VERTEX,
             }
         );
@@ -754,13 +853,32 @@ impl GameRenderStateWgpu {
                 timestamp_writes: None,
             });
 
+
+            self.tile_uniform.mul_rgb = [1.0, 1.0, 1.0];
+            self.queue.write_buffer(&self.tile_uniform_buffer, 0, bytemuck::cast_slice(&[self.tile_uniform]));
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_bind_group(1, &self.tile_texture_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_bind_group(2, &self.tile_uniform_bind_group, &[]);
+
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
-            assert!(self.num_indices >= vertex_tiles.len() as u32, "Ran out of indices in the IBO!");
-            let idx_val = std::cmp::min(self.num_indices, vertex_tiles.len() as u32);
+            assert!(self.num_indices >= fg_vertex_tiles.len() as u32, "Ran out of indices in the IBO!");
+            assert!(self.num_indices >= bg_vertex_tiles.len() as u32, "Ran out of indices in the IBO!");
+
+            // background tiles
+            self.tile_uniform.mul_rgb = [0.7, 0.7, 0.8];
+            self.queue.write_buffer(&self.tile_uniform_buffer, 0, bytemuck::cast_slice(&[self.tile_uniform]));
+            render_pass.set_vertex_buffer(0, self.bg_vertex_buffer.slice(..));
+
+            let idx_val = std::cmp::min(self.num_indices, bg_vertex_tiles.len() as u32);
+            render_pass.draw_indexed(0..idx_val, 0, 0..1);
+
+            // foreground tiles
+            self.tile_uniform.mul_rgb = [1.0, 1.0, 1.0];
+            self.queue.write_buffer(&self.tile_uniform_buffer, 0, bytemuck::cast_slice(&[self.tile_uniform]));
+            render_pass.set_vertex_buffer(0, self.fg_vertex_buffer.slice(..));
+
+            let idx_val = std::cmp::min(self.num_indices, fg_vertex_tiles.len() as u32);
             render_pass.draw_indexed(0..idx_val, 0, 0..1);
         }
 

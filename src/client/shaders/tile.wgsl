@@ -34,6 +34,8 @@ var t_tile_sheet: texture_2d<f32>;
 var t_mask_sheet: texture_2d<f32>;
 @group(1) @binding(2)
 var tex_sampler: sampler;
+@group(2) @binding(0)
+var<uniform> mul_rgb: vec3<f32>;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -52,7 +54,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (all(rgb == vec3(1.0, 0.0, 1.0))) {
         discard;
     }
-    //rgb *= mul_rgb;
+    rgb *= mul_rgb;
 
     return vec4<f32>(rgb, 1.0);
 }
