@@ -24,12 +24,37 @@ fn vs_main(
     var out: VertexOutput;
     out.tile_uv = in.tile_uv;
     out.mask_uv = in.mask_uv;
-    //out.clip_position = vec4<f32>(camera.view_matrix * in.tile_xyz, 1.0);
     out.clip_position = vec4<f32>(camera.view_matrix * vec3(in.tile_xyz.xy, 1.0), 1.0);
     return out;
 }
 
+@group(1) @binding(0)
+var t_tile_sheet: texture_2d<f32>;
+@group(1) @binding(1)
+var s_tile_sheet: sampler;
+@group(2) @binding(0)
+var t_mask_sheet: texture_2d<f32>;
+@group(2) @binding(1)
+var s_mask_sheet: sampler;
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(0.3, 0.2, 0.1, 1.0);
+    // Get texture properties (should this be a uniform?).
+    let tile_tex_size: vec2<f32> = vec2<f32>(textureDimensions(t_tile_sheet, 0));
+    let mask_tex_size: vec2<u32> = textureDimensions(t_mask_sheet, 0);
+
+    // Early discard if mask coevers texture.
+    let mask: f32 = textureSample(t_mask_sheet, s_mask_sheet, in.mask_uv / vec2<f32>(mask_tex_size.x)).r; 
+    if (mask == 0) {
+        discard;
+    }
+
+    // Set pixel
+    var rgb: vec3<f32> = textureSample(t_tile_sheet, s_tile_sheet, in.tile_uv / tile_tex_size).rgb;
+    if (all(rgb == vec3(1.0, 0.0, 1.0))) {
+        discard;
+    }
+    //rgb *= mul_rgb;
+
+    return vec4<f32>(rgb, 1.0);
 }

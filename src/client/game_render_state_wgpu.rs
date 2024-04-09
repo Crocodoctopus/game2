@@ -64,30 +64,8 @@ pub struct GameRenderStateWgpu {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
 
-    /*
-    // Quad IBO.
-    quad_ibo: GLuint,
-
-    // Light rendering.
-    light_program: GLuint,
-    light_vao: GLuint,
-    light_tex: GLuint,
-    light_xy: GLuint,
-
-    // Tile rendering.
-    tile_program: GLuint,
-    tile_vao: GLuint,
-    tile_sheet: GLuint,
-    mask_sheet: GLuint,
-
-    fg_tile_xyz: GLuint,
-    fg_tile_uv: GLuint,
-    fg_mask_uv: GLuint,
-
-    bg_tile_xyz: GLuint,
-    bg_tile_uv: GLuint,
-    bg_mask_uv: GLuint,
-    */
+    tile_sheet_bind_group: wgpu::BindGroup,
+    mask_sheet_bind_group: wgpu::BindGroup,
 }
 
 impl GameRenderStateWgpu {
@@ -153,6 +131,216 @@ impl GameRenderStateWgpu {
         };
         surface.configure(&device, &config);
 
+        // texture loading here
+        #[rustfmt::skip]
+        let decode_png_as_rgba = |file: &[u8]| {
+            let mut reader = png::Decoder::new(file).read_info().unwrap();
+            let mut data = vec![0; reader.output_buffer_size()];
+
+            reader.next_frame(&mut data).unwrap();
+            let info = reader.info();
+
+            let palette = info.palette.as_ref().unwrap();
+            let mut rgba = vec![0; 4 * (info.width * info.height) as usize ];
+            for i in 0..(info.width * info.height) as usize {
+                let pindex = data[i] as usize;
+                rgba[4 * i + 0] = palette[3 * pindex + 0];
+                rgba[4 * i + 1] = palette[3 * pindex + 1];
+                rgba[4 * i + 2] = palette[3 * pindex + 2];
+                rgba[4 * i + 3] = 255;
+            }
+
+            (rgba, info.width, info.height)
+        };
+
+        #[rustfmt::skip]
+        let decode_png_as_gray8 = |file: &[u8]| {
+            let mut reader = png::Decoder::new(file).read_info().unwrap();
+            let mut data = vec![0; reader.output_buffer_size()];
+
+            reader.next_frame(&mut data).unwrap();
+            let info = reader.info();
+
+            let palette = info.palette.as_ref().unwrap();
+            let mut rgb = vec![0; (info.width * info.height) as usize ];
+            for i in 0..(info.width * info.height) as usize {
+                let pindex = data[i] as usize;
+                rgb[i] = palette[3 * pindex];
+            }
+
+            (rgb, info.width, info.height)
+        };
+
+        let tile_sheet = {
+            // Load 
+            let file = include_bytes!("../../resources/tile_sheet.png");
+            let (data, w, h) = decode_png_as_rgba(file);
+            let texture_size = wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            };
+            let texture = device.create_texture(
+                &wgpu::TextureDescriptor {
+                    // All textures are stored as 3D, we represent our 2D texture
+                    // by setting depth to 1.
+                    size: texture_size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    // Most images are stored using sRGB, so we need to reflect that here.
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    // TEXTURE_BINDING tells wgpu that we want to use this texture in shaders
+                    // COPY_DST means that we want to copy data to this texture
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    label: Some("tile_sheet"),
+                    // This is the same as with the SurfaceConfig. It
+                    // specifies what texture formats can be used to
+                    // create TextureViews for this texture. The base
+                    // texture format (Rgba8UnormSrgb in this case) is
+                    // always supported. Note that using a different
+                    // texture format is not supported on the WebGL2
+                    // backend.
+                    view_formats: &[],
+                }
+            );
+            queue.write_texture(
+                // Tells wgpu where to copy the pixel data
+                wgpu::ImageCopyTexture {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                // The actual pixel data
+                &data,
+                // The layout of the texture
+                wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * w),
+                    rows_per_image: Some(h),
+                },
+                texture_size,
+            );
+            texture
+        };
+
+
+
+        let mask_sheet = {
+            // Load 
+            let file = include_bytes!("../../resources/mask_sheet.png");
+            let (data, w, h) = decode_png_as_gray8(file);
+            let texture_size = wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            };
+            let texture = device.create_texture(
+                &wgpu::TextureDescriptor {
+                    size: texture_size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    label: Some("mask_sheet"),
+                    view_formats: &[],
+                }
+            );
+            queue.write_texture(
+                // Tells wgpu where to copy the pixel data
+                wgpu::ImageCopyTexture {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                // The actual pixel data
+                &data,
+                // The layout of the texture
+                wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w),
+                    rows_per_image: Some(h),
+                },
+                texture_size,
+            );
+            texture
+        };
+
+        let tile_sheet_texture_view = tile_sheet.create_view(&wgpu::TextureViewDescriptor::default());
+        let mask_sheet_texture_view = mask_sheet.create_view(&wgpu::TextureViewDescriptor::default());
+        let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let texture_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        // This should match the filterable field of the
+                        // corresponding Texture entry above.
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+                label: Some("texture_bind_group_layout"),
+            });
+
+        let tile_sheet_bind_group = device.create_bind_group(
+                &wgpu::BindGroupDescriptor {
+                    layout: &texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&tile_sheet_texture_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&texture_sampler),
+                        }
+                    ],
+                    label: Some("diffuse_bind_group"),
+                }
+            );
+            
+        let mask_sheet_bind_group = device.create_bind_group(
+                &wgpu::BindGroupDescriptor {
+                    layout: &texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&mask_sheet_texture_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&texture_sampler),
+                        }
+                    ],
+                    label: Some("diffuse_bind_group"),
+                }
+            );
+
+
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/tile.wgsl"));
 
         let camera_uniform = CameraUniform {
@@ -199,6 +387,8 @@ impl GameRenderStateWgpu {
                 label: Some("Render Pipeline Layout"),
                 bind_group_layouts: &[
                     &camera_bind_group_layout,
+                    &texture_bind_group_layout,
+                    &texture_bind_group_layout,
                 ],
                 push_constant_ranges: &[],
         });
@@ -248,7 +438,8 @@ impl GameRenderStateWgpu {
         #[rustfmt::skip]
         let ibo_data: Vec<u16> = (0..13107)
             .into_iter()
-            .flat_map(|i| [4 * i + 0, 4 * i + 1, 4 * i + 2, 4 * i + 3, u16::MAX])
+            .flat_map(|i| [i * 4 + 0, i * 4 + 3, i * 4 + 1, i * 4 + 2, u16::MAX])
+            //.flat_map(|i| [4 * i + 0, 4 * i + 1, 4 * i + 2, 4 * i + 3, u16::MAX])
             .collect();
         assert_eq!(ibo_data.len(), 65535);
 
@@ -286,251 +477,9 @@ impl GameRenderStateWgpu {
             camera_uniform,
             camera_buffer,
             camera_bind_group,
+            tile_sheet_bind_group,
+            mask_sheet_bind_group,
         }
-        /*
-        // Create a reusable index buffer for a stream of generic quads.
-        #[rustfmt::skip]
-        let quad_ibo = unsafe {
-            let data: Vec<u16> = (0..13107)
-                .into_iter()
-                .flat_map(|i| [4 * i + 0, 4 * i + 1, 4 * i + 2, 4 * i + 3, u16::MAX])
-                .collect();
-            assert_eq!(data.len(), 65535);
-            let mut ibo: GLuint = 0;
-            gl::GenBuffers(1, &mut ibo as *mut GLuint);
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ibo);
-            gl::BufferData(gl::ELEMENT_ARRAY_BUFFER, 2 * 65535, data.as_ptr() as *const GLvoid, gl::STATIC_READ);
-            ibo
-        };
-
-        // Compile a shader from code.
-        let compile_shader = |shader: &'static str, t: GLenum| unsafe {
-            use std::ffi::CString;
-            let filedata = CString::new(shader).unwrap();
-            let shader = gl::CreateShader(t);
-            gl::ShaderSource(
-                shader,
-                1,
-                &(filedata.as_ptr()) as *const *const GLchar,
-                std::ptr::null(),
-            );
-            gl::CompileShader(shader);
-            let mut iv: GLint = 0;
-            gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut iv as *mut GLint);
-            if iv != 1 {
-                let mut log_len: GLint = 0;
-                gl::GetShaderiv(shader, gl::INFO_LOG_LENGTH, &mut log_len as *mut GLint);
-                let mut log_raw = vec![0u8; log_len as usize];
-                gl::GetShaderInfoLog(
-                    shader,
-                    log_len,
-                    &mut log_len as *mut GLint,
-                    log_raw.as_mut_ptr() as *mut GLchar,
-                );
-                return Err(String::from_utf8(log_raw));
-            }
-            return Ok(shader);
-        };
-
-        // Generate everything tile related.
-        #[rustfmt::skip]
-        let (tile_program, tile_vao, tile_sheet, mask_sheet, fg_tile_xyz, fg_tile_uv, fg_mask_uv, bg_tile_xyz, bg_tile_uv, bg_mask_uv) = unsafe {
-            #[rustfmt::skip]
-            let tile_program = {
-                // 
-                let vert_shader = compile_shader(include_str!("shaders/tile.vert"), gl::VERTEX_SHADER).unwrap();
-                let frag_shader = compile_shader(include_str!("shaders/tile.frag"), gl::FRAGMENT_SHADER).unwrap();
-                
-                // Program.
-                let program = gl::CreateProgram();
-                gl::AttachShader(program, vert_shader);
-                gl::AttachShader(program, frag_shader);
-                gl::LinkProgram(program);
-                // Check link status.
-                let mut linked: GLint = 1;
-                gl::GetProgramiv(program, gl::LINK_STATUS, &mut linked as *mut _);
-                assert_eq!(linked, 1);
-                gl::DeleteShader(vert_shader);
-                gl::DeleteShader(frag_shader);
-                program
-            };
-
-            #[rustfmt::skip]
-            let tile_vao = {
-                let mut vao = 0;
-                gl::GenVertexArrays(1, &mut vao as *mut GLuint);
-                gl::BindVertexArray(vao);
-                // Layout 0
-                gl::EnableVertexAttribArray(0);
-                gl::VertexAttribFormat(0, 3, gl::FLOAT, gl::FALSE, 0);
-                gl::VertexAttribBinding(0, 0);
-                // Layout 1
-                gl::EnableVertexAttribArray(1);
-                gl::VertexAttribFormat(1, 2, gl::FLOAT, gl::FALSE, 0);
-                gl::VertexAttribBinding(1, 1);
-                // Layout 2
-                gl::EnableVertexAttribArray(2);
-                gl::VertexAttribFormat(2, 2, gl::FLOAT, gl::FALSE, 0);
-                gl::VertexAttribBinding(2, 2);
-                //
-                gl::BindVertexArray(0);
-                vao
-            };
-            
-            #[rustfmt::skip]
-            let decode_png_as_rgb = |file: &[u8]| {
-                let mut reader = png::Decoder::new(file).read_info().unwrap();
-                let mut data = vec![0; reader.output_buffer_size()];
-
-                reader.next_frame(&mut data).unwrap();
-                let info = reader.info();
-
-                let palette = info.palette.as_ref().unwrap();
-                let mut rgb = vec![0; 3 * (info.width * info.height) as usize ];
-                for i in 0..(info.width * info.height) as usize {
-                    let pindex = data[i] as usize;
-                    rgb[3 * i + 0] = palette[3 * pindex + 0];
-                    rgb[3 * i + 1] = palette[3 * pindex + 1];
-                    rgb[3 * i + 2] = palette[3 * pindex + 2];
-                }
-
-                (rgb, info.width, info.height)
-            };
-
-            #[rustfmt::skip]
-            let decode_png_as_gray8 = |file: &[u8]| {
-                let mut reader = png::Decoder::new(file).read_info().unwrap();
-                let mut data = vec![0; reader.output_buffer_size()];
-
-                reader.next_frame(&mut data).unwrap();
-                let info = reader.info();
-
-                let palette = info.palette.as_ref().unwrap();
-                let mut rgb = vec![0; (info.width * info.height) as usize ];
-                for i in 0..(info.width * info.height) as usize {
-                    let pindex = data[i] as usize;
-                    rgb[i] = palette[3 * pindex];
-                }
-
-                (rgb, info.width, info.height)
-            };
-
-            #[rustfmt::skip]
-            let tile_sheet = {
-                // Load 
-                let file = include_bytes!("../../resources/tile_sheet.png");
-                let (data, w, h) = decode_png_as_rgb(file);
-                let mut tex = 0;
-                gl::GenTextures(1, &mut tex as *mut GLuint);
-                gl::BindTexture(gl::TEXTURE_2D, tex);
-                gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RGBA as GLint, w as GLint, h as GLint, 0, gl::RGB, gl::UNSIGNED_BYTE, data.as_ptr() as *const GLvoid);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as GLint);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as GLint);
-                tex
-            };
-
-            #[rustfmt::skip]
-            let mask_sheet = {
-                // Load 
-                let file = include_bytes!("../../resources/mask_sheet.png");
-                let (data, w, h) = decode_png_as_gray8(file);
-                let mut tex = 0;
-                gl::GenTextures(1, &mut tex as *mut GLuint);
-                gl::BindTexture(gl::TEXTURE_2D, tex);
-                gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
-                gl::TexImage2D(gl::TEXTURE_2D, 0, gl::R8UI as GLint, w as GLint, h as GLint, 0, gl::RED_INTEGER, gl::UNSIGNED_BYTE, data.as_ptr() as *const GLvoid);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as GLint);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as GLint);
-                tex
-            };
-
-            let mut fg_tile_xyz: GLuint = 0;
-            let mut fg_tile_uv: GLuint = 0;
-            let mut fg_mask_uv: GLuint = 0;
-            gl::GenBuffers(1, &mut fg_tile_xyz as *mut GLuint);
-            gl::GenBuffers(1, &mut fg_tile_uv as *mut GLuint);
-            gl::GenBuffers(1, &mut fg_mask_uv as *mut GLuint);
-
-            let mut bg_tile_xyz: GLuint = 0;
-            let mut bg_tile_uv: GLuint = 0;
-            let mut bg_mask_uv: GLuint = 0;
-            gl::GenBuffers(1, &mut bg_tile_xyz as *mut GLuint);
-            gl::GenBuffers(1, &mut bg_tile_uv as *mut GLuint);
-            gl::GenBuffers(1, &mut bg_mask_uv as *mut GLuint);
-
-            (tile_program, tile_vao, tile_sheet, mask_sheet, fg_tile_xyz, fg_tile_uv, fg_mask_uv, bg_tile_xyz, bg_tile_uv, bg_mask_uv)
-        };
-
-        // Generate everything light related.
-        #[rustfmt::skip]
-        let (light_program, light_vao, light_tex, light_xy) = unsafe {
-            #[rustfmt::skip]
-            let light_program = {
-                let vert_shader = compile_shader(include_str!("shaders/light.vert"), gl::VERTEX_SHADER).unwrap();
-                let frag_shader = compile_shader(include_str!("shaders/light.frag"), gl::FRAGMENT_SHADER).unwrap();
-                
-                // Program.
-                let program = gl::CreateProgram();
-                gl::AttachShader(program, vert_shader);
-                gl::AttachShader(program, frag_shader);
-                gl::LinkProgram(program);
-                // Check link status.
-                let mut linked: GLint = 1;
-                gl::GetProgramiv(program, gl::LINK_STATUS, &mut linked as *mut _);
-                assert_eq!(linked, 1);
-                gl::DeleteShader(vert_shader);
-                gl::DeleteShader(frag_shader);
-                program
-            };
-
-            #[rustfmt::skip]
-            let light_vao = {
-                let mut vao = 0;
-                gl::GenVertexArrays(1, &mut vao as *mut GLuint);
-                gl::BindVertexArray(vao);
-                // Layout 0
-                gl::EnableVertexAttribArray(0);
-                gl::VertexAttribFormat(0, 2, gl::FLOAT, gl::FALSE, 0);
-                gl::VertexAttribBinding(0, 0);
-                //
-                gl::BindVertexArray(0);
-                vao
-            };
-
-
-            let mut light_tex = 0;
-            gl::GenTextures(1, &mut light_tex as *mut GLuint);
-            
-            let mut light_xy = 0;
-            gl::GenBuffers(1, &mut light_xy as *mut GLuint);
-        
-            (light_program, light_vao, light_tex, light_xy)
-        };
-
-        Self {
-            quad_ibo,
-
-            // Light rendering.
-            light_program,
-            light_vao,
-            light_tex,
-            light_xy,
-
-            // Teture rendering.
-            tile_program,
-            tile_sheet,
-            mask_sheet,
-            tile_vao,
-
-            fg_tile_xyz,
-            fg_tile_uv,
-            fg_mask_uv,
-
-            bg_tile_xyz,
-            bg_tile_uv,
-            bg_mask_uv,
-        }
-        */
     }
 
     pub fn resize(&mut self, new_size: (i32, i32)) {
@@ -852,12 +801,13 @@ impl GameRenderStateWgpu {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
-            // TODO: make sure to update indices wehn adding textures from tut
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.tile_sheet_bind_group, &[]);
+            render_pass.set_bind_group(2, &self.mask_sheet_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
             let idx_val = std::cmp::min(self.num_indices, vertex_tiles.len() as u32);
-            render_pass.draw(0..idx_val, 0..1);
+            render_pass.draw_indexed(0..idx_val, 0, 0..1);
         }
 
 
