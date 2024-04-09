@@ -1,6 +1,49 @@
 use crate::client::GameFrame;
 use nalgebra_glm::*;
 use std::path::Path;
+use wgpu::util::DeviceExt;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct TileVertex {
+    tile_xyz: [f32; 3],
+    tile_uv: [f32; 2],
+    mask_uv: [f32; 2],
+}
+
+impl TileVertex {
+    // NOTE: `wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];` is also valid
+    const VAO: &'static [wgpu::VertexAttribute] = 
+        &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x2];
+    /*
+    const VAO: &'static [wgpu::VertexAttribute] = &[
+        wgpu::VertexAttribute {
+            offset: 0,
+            shader_location: 0,
+            format: wgpu::VertexFormat::Float32x2,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(TileVertex, mask_uv) as wgpu::BufferAddress,
+            shader_location: 1,
+            format: wgpu::VertexFormat::Float32x2,
+        },
+    ];
+    */
+
+    const fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TileVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: Self::VAO,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct CameraUniform {
+    view_matrix: [[f32; 4]; 4],
+}
 
 pub struct GameRenderStateWgpu {
     instance: wgpu::Instance,
@@ -10,6 +53,14 @@ pub struct GameRenderStateWgpu {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     size: (i32, i32),
+
+    render_pipeline: wgpu::RenderPipeline,
+
+    vertex_buffer: wgpu::Buffer,
+
+    camera_uniform: CameraUniform,
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
 
     /*
     // Quad IBO.
@@ -39,57 +90,9 @@ pub struct GameRenderStateWgpu {
 
 impl GameRenderStateWgpu {
     pub fn new(_root: &'static Path, window: &mut crate::window::Window) -> Self {
-        /*
-        // Create the vertex and index buffers
-        let vertex_size = 8;//std::mem::size_of::<Vertex>();
-        let (vertex_data, index_data) = create_vertices();
-
-        let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertex_data),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        
-        let index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(&index_data),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        
-        // Create pipeline layout
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(64),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        sample_type: wgpu::TextureSampleType::Uint,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        */
-        
         let size = window.window.get_size();
+        let scale = window.window.get_content_scale();
+        let size = ((size.0 as f32 * scale.0) as i32, (size.1 as f32 * scale.1) as i32);
 
         // The instance is a handle to our GPU
         // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
@@ -144,9 +147,124 @@ impl GameRenderStateWgpu {
             present_mode: surface_caps.present_modes[0],
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
-            desired_maximum_frame_latency: 0,
+            desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
+
+        let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/tile.wgsl"));
+
+        let camera_uniform = CameraUniform {
+            view_matrix: Mat4::identity().into(),
+        };
+
+        let camera_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Camera Buffer"),
+                contents: bytemuck::cast_slice(&[camera_uniform]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+
+        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some("camera_bind_group_layout"),
+        });
+
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &camera_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                }
+            ],
+            label: Some("camera_bind_group"),
+        });
+
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[
+                    &camera_bind_group_layout,
+                ],
+                push_constant_ranges: &[],
+        });
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[
+                    TileVertex::desc(),
+                ],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                polygon_mode: wgpu::PolygonMode::Fill,
+                // Requires Features::DEPTH_CLIP_CONTROL
+                unclipped_depth: false,
+                // Requires Features::CONSERVATIVE_RASTERIZATION
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+        });
+
+        #[rustfmt::skip]
+        let data: Vec<TileVertex> = (0..1)
+            .into_iter()
+            .map(|i| {
+                let i = i as f32;
+                TileVertex {
+                    tile_xyz: [0.2, 0.4, 0.6],
+                    tile_uv: [4. * i + 0., 4. * i + 1.],
+                    mask_uv: [4. * i + 2., 4. * i + 3.],
+                }
+            })
+            .collect();
+        //assert_eq!(data.len(), 65535);
+
+        let vertex_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: bytemuck::cast_slice(&data),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+
+
+
 
         Self {
             instance,
@@ -154,7 +272,12 @@ impl GameRenderStateWgpu {
             device,
             queue,
             config,
-            size
+            size,
+            render_pipeline,
+            vertex_buffer,
+            camera_uniform,
+            camera_buffer,
+            camera_bind_group,
         }
         /*
         // Create a reusable index buffer for a stream of generic quads.
@@ -418,46 +541,36 @@ impl GameRenderStateWgpu {
     }
 
     pub fn render(&mut self, _ts: u64, game_frame: GameFrame) {
-        /*
         // View mat3.
         let view = {
-            let view = Mat3::identity();
+            let view = Mat4::identity();
             let view = view
-                * scaling2d(&Vec2::new(
+                * scaling(&Vec3::new(
                     2. / game_frame.viewport_w,
                     -2. / game_frame.viewport_h,
+                    1.0,
                 ));
             let view = view
-                * translation2d(&Vec2::new(
+                * translation(&Vec3::new(
                     -game_frame.viewport_x - game_frame.viewport_w / 2.,
                     -game_frame.viewport_y - game_frame.viewport_h / 2.,
+                    1.0,
                 ));
             view
         };
-
-        unsafe {
-            gl::ClearColor(
-                0x15 as f32 / 256.,
-                0x9F as f32 / 256.,
-                0xEA as f32 / 256.,
-                1.,
-            );
-            gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-        }
+        self.camera_uniform.view_matrix = view.into();
+        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
 
         // Render tiles.
+        let max_tiles = (game_frame.tiles_w - 2) * (game_frame.tiles_h - 2);
+        let mut vertex_tiles = Vec::with_capacity(max_tiles);
         'skip: {
-            let max_tiles = (game_frame.tiles_w - 2) * (game_frame.tiles_h - 2);
             if max_tiles == 0 {
                 break 'skip;
             }
 
             // Calculate tile data and upload to GPU.
             let (fg_count, bg_count) = 'calc_tiles: {
-                let mut fg_tile_xyz = Vec::<Vec3>::with_capacity(4 * max_tiles);
-                let mut fg_tile_uv = Vec::<Vec2>::with_capacity(4 * max_tiles);
-                let mut fg_mask_uv = Vec::<Vec2>::with_capacity(4 * max_tiles);
-
                 let mut bg_tile_xyz = Vec::with_capacity(4 * max_tiles);
                 let mut bg_tile_uv = Vec::with_capacity(4 * max_tiles);
                 let mut bg_mask_uv = Vec::with_capacity(4 * max_tiles);
@@ -476,23 +589,9 @@ impl GameRenderStateWgpu {
                             // Fill vertex data.
                             let tx = 16. * (x + game_frame.tiles_x) as f32;
                             let ty = 16. * (y + game_frame.tiles_y) as f32;
-                            #[rustfmt::skip]
-                            fg_tile_xyz.extend_from_slice(&[
-                                Vec3::new(tx - 8.,       ty - 8.,       tile as f32),
-                                Vec3::new(tx + 16. + 8., ty - 8.,       tile as f32),
-                                Vec3::new(tx + 16. + 8., ty + 16. + 8., tile as f32),
-                                Vec3::new(tx - 8.,       ty + 16. + 8., tile as f32), ]);
 
-                            // Fill uv data.
-                            let tx = 16. * tile as f32;
-                            #[rustfmt::skip]
-                            fg_tile_uv.extend_from_slice(&[
-                                Vec2::new(tx,       0. ),
-                                Vec2::new(16. + tx, 0. ),
-                                Vec2::new(16. + tx, 16.),
-                                Vec2::new(0. + tx,  16.), ]);
+                            let uv_tx = 16. * tile as f32;
 
-                            // Fill mask uv data.
                             let tw = game_frame.tiles_w;
                             let t0 = ((tile > game_frame.fg_tiles[index - tw]) as u8) << 0;
                             let t1 = ((tile > game_frame.fg_tiles[index - tw + 1]) as u8) << 1;
@@ -505,11 +604,26 @@ impl GameRenderStateWgpu {
                             let t7 = ((tile > game_frame.fg_tiles[index - tw - 1]) as u8) << 3;
                             let v = ((t4 | t5 | t6 | t7) << 2) as f32;
                             #[rustfmt::skip]
-                            fg_mask_uv.extend_from_slice(&[
-                                Vec2::new(u,      v     ),
-                                Vec2::new(u + 4., v     ),
-                                Vec2::new(u + 4., v + 4.),
-                                Vec2::new(u,      v + 4.), ]);
+                            vertex_tiles.push(TileVertex {
+                                tile_xyz: [tx - 8.,       ty - 8.,       tile as f32],
+                                tile_uv:  [uv_tx, 0.],
+                                mask_uv:  [u, v],
+                            });
+                            vertex_tiles.push(TileVertex {
+                                tile_xyz: [tx + 16. + 8., ty - 8.,       tile as f32],
+                                tile_uv:  [16. + tx, 0.],
+                                mask_uv:  [u + 4., v],
+                            });
+                            vertex_tiles.push(TileVertex {
+                                tile_xyz: [tx + 16. + 8., ty + 16. + 8., tile as f32],
+                                tile_uv:  [16. + tx, 16.],
+                                mask_uv:  [u + 4., v + 4.],
+                            });
+                            vertex_tiles.push(TileVertex {
+                                tile_xyz: [tx - 8.,       ty + 16. + 8., tile as f32],
+                                tile_uv:  [0. + tx,  16.],
+                                mask_uv:  [u,      v + 4.],
+                            });
 
                             // Skip check bg tile.
                             continue 'x;
@@ -563,6 +677,7 @@ impl GameRenderStateWgpu {
                     }
                 }
 
+                /*
                 //
                 #[rustfmt::skip]
                 let _ = unsafe {
@@ -586,8 +701,13 @@ impl GameRenderStateWgpu {
 
                     break 'calc_tiles (fg_count / 4, bg_count / 4)
                 };
-            };
+                */
 
+                let fg_count = 0;
+                let bg_count = bg_tile_xyz.len();
+                break 'calc_tiles (fg_count / 4, bg_count / 4)
+            };
+            /*
             // Draw.
             #[rustfmt::skip]
             let _ = unsafe {
@@ -626,8 +746,10 @@ impl GameRenderStateWgpu {
                 gl::BindVertexArray(0);
                 
             };
+            */
         }
 
+        /*
         // Render lighting.
         {
             // Set up.
@@ -688,17 +810,28 @@ impl GameRenderStateWgpu {
             label: Some("Render Encoder"),
         });
 
+        // TODO: test if copying is faster than updating if we care
+        self.vertex_buffer.destroy();
+        self.vertex_buffer = self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: bytemuck::cast_slice(&vertex_tiles),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
+                // This is what @location(0) in the fragment shader targets
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
+                            r: 0x15 as f64 / 256.,
+                            g: 0x9F as f64 / 256.,
+                            b: 0xEA as f64 / 256.,
                             a: 1.0,
                         }),
                         // TODO:
@@ -709,7 +842,14 @@ impl GameRenderStateWgpu {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
+
+            render_pass.set_pipeline(&self.render_pipeline);
+            // TODO: make sure to update indices wehn adding textures from tut
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.draw(0..9, 0..1);
         }
+
 
         // submit will accept anything that implements IntoIter
         self.queue.submit(std::iter::once(encoder.finish()));
