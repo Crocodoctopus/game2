@@ -25,7 +25,7 @@ fn vs_main(
     out.tile_uv = in.tile_uv;
     out.mask_uv = in.mask_uv;
     //out.clip_position = vec4<f32>(camera.view_matrix * in.tile_xyz, 1.0);
-    out.clip_position = vec4<f32>(camera.view_matrix * in.tile_xyz, 1.0);
+    out.clip_position = vec4<f32>(camera.view_matrix * vec3(in.tile_xyz.xy, 1.0), 1.0);
     return out;
 }
 

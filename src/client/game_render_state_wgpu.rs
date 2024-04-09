@@ -57,6 +57,8 @@ pub struct GameRenderStateWgpu {
     render_pipeline: wgpu::RenderPipeline,
 
     vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    num_indices: u32,
 
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
@@ -223,8 +225,8 @@ impl GameRenderStateWgpu {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                front_face: wgpu::FrontFace::Cw,
+                cull_mode: None,//Some(wgpu::Face::Back),
                 // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
                 polygon_mode: wgpu::PolygonMode::Fill,
                 // Requires Features::DEPTH_CLIP_CONTROL
@@ -241,29 +243,33 @@ impl GameRenderStateWgpu {
             multiview: None,
         });
 
+        let vertex_data: Vec<TileVertex> = vec![];
+
         #[rustfmt::skip]
-        let data: Vec<TileVertex> = (0..1)
+        let ibo_data: Vec<u16> = (0..13107)
             .into_iter()
-            .map(|i| {
-                let i = i as f32;
-                TileVertex {
-                    tile_xyz: [0.2, 0.4, 0.6],
-                    tile_uv: [4. * i + 0., 4. * i + 1.],
-                    mask_uv: [4. * i + 2., 4. * i + 3.],
-                }
-            })
+            .flat_map(|i| [4 * i + 0, 4 * i + 1, 4 * i + 2, 4 * i + 3, u16::MAX])
             .collect();
-        //assert_eq!(data.len(), 65535);
+        assert_eq!(ibo_data.len(), 65535);
+
+
 
         let vertex_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(&data),
+                contents: bytemuck::cast_slice(&vertex_data),
                 usage: wgpu::BufferUsages::VERTEX,
             }
         );
 
-
+        let index_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Index Buffer"),
+                contents: bytemuck::cast_slice(&ibo_data),
+                usage: wgpu::BufferUsages::INDEX,
+            }
+        );
+        let num_indices = ibo_data.len() as u32;
 
 
         Self {
@@ -275,6 +281,8 @@ impl GameRenderStateWgpu {
             size,
             render_pipeline,
             vertex_buffer,
+            index_buffer,
+            num_indices,
             camera_uniform,
             camera_buffer,
             camera_bind_group,
@@ -554,7 +562,7 @@ impl GameRenderStateWgpu {
                 * translation(&Vec3::new(
                     -game_frame.viewport_x - game_frame.viewport_w / 2.,
                     -game_frame.viewport_y - game_frame.viewport_h / 2.,
-                    1.0,
+                    0.0,
                 ));
             view
         };
@@ -847,7 +855,9 @@ impl GameRenderStateWgpu {
             // TODO: make sure to update indices wehn adding textures from tut
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.draw(0..9, 0..1);
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
+            let idx_val = std::cmp::min(self.num_indices, vertex_tiles.len() as u32);
+            render_pass.draw(0..idx_val, 0..1);
         }
 
 
