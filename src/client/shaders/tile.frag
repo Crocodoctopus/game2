@@ -3,9 +3,9 @@
 in vec2 frag_tile_uv;
 in vec2 frag_mask_uv;
 
-layout(location = 0) uniform sampler2D tile_sheet;
-layout(location = 1) uniform isampler2D mask_sheet;
-layout(location = 2) uniform vec3 mul_rgb;
+layout(binding = 0) uniform sampler2D tile_sheet;
+layout(binding = 1) uniform isampler2D mask_sheet;
+layout(binding = 2) uniform vec3 mul_rgb;
 
 out vec3 rgb;
 

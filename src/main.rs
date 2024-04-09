@@ -6,11 +6,6 @@ mod shared;
 mod time;
 mod window;
 
-mod gl {
-    include!("gl_460_core.rs");
-}
-
-pub use gl::*;
 pub use handle_map::*;
 pub use shared::*;
 pub use time::{timestamp_as_msecs, timestamp_as_secs, timestamp_as_usecs};
@@ -34,5 +29,5 @@ fn main() {
     });
 
     // Start/Run/Free app.
-    ClientApp::new(&PATH).run();
+    ClientApp::launch(&PATH);
 }

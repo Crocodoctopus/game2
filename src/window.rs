@@ -1,36 +1,61 @@
-use crate::gl;
-use glfw::*;
-
 pub struct Window {
-    window: PWindow,
-    events: GlfwReceiver<(f64, WindowEvent)>,
+    pub window: winit::window::Window,
 }
 
 impl Window {
-    pub fn new(glfw: &mut Glfw, w: u32, h: u32) -> Self {
-        glfw.window_hint(WindowHint::Resizable(false));
-        let (mut window, events) = glfw
-            .create_window(w, h, "Rarr", WindowMode::Windowed)
-            .unwrap();
-        window.set_key_polling(true);
-        window.set_mouse_button_polling(true);
-        window.set_cursor_pos_polling(true);
-        window.make_current();
-
-        Self { window, events }
+    pub fn new(window: winit::window::Window) -> Self {
+        Self { window }
     }
 
-    pub fn gl_load(&mut self) {
-        gl::load_with(|s| self.window.get_proc_address(s) as *const _);
+    pub fn swap(&self) {
+        self.window.request_redraw();
+    }
+}
+
+pub struct EventLoop {
+    pub event_loop: winit::event_loop::EventLoop<()>,
+}
+
+impl EventLoop {
+    pub fn new(event_loop: winit::event_loop::EventLoop<()>) -> Self {
+        Self { event_loop }
     }
 
-    pub fn swap(&mut self) {
-        self.window.swap_buffers();
-    }
+    pub fn poll(&mut self) -> impl Iterator<Item = InputEvent> {
+        let mut vec = Vec::new();
+        use winit::platform::pump_events::EventLoopExtPumpEvents;
+        let status = self
+            .event_loop
+            .pump_events(Some(std::time::Duration::ZERO), |event, _| {
+                /*use winit::event::*;
+                use winit::keyboard::*;
+                match event {
+                    Event::WindowEvent {
+                        event: WindowEvent::CloseRequested,
+                        ..
+                    } => { vec.push(InputEvent::WindowClose) },
+                    Event::WindowEvent {
+                        event: WindowEvent::KeyboardInput { device_id, event, is_synthetic },
+                        ..
+                    } => {
+                        // Get keycode.
+                        use winit::platform::scancode::PhysicalKeyExtScancode;
+                        let scancode = match event.physical_key {
+                            PhysicalKey::Code(keycode) => match keycode.to_scancode() {
+                                Some(scancode) => scancode,
+                                None => return,
+                            },
+                            _ => return,
+                        }
 
-    pub fn poll(&mut self) -> Vec<InputEvent> {
-        let (w_w, w_h) = self.window.get_size();
-        let (w_w, w_h) = (w_w as f64, w_h as f64);
+
+
+                    }
+                    _ => { }
+                }*/
+            });
+
+        /*
         glfw::flush_messages(&self.events)
             .map(|(_, e)| match e {
                 glfw::WindowEvent::CursorPos(x, y) => InputEvent::MouseMove {
@@ -72,7 +97,9 @@ impl Window {
                 }
                 _ => InputEvent::WindowClose,
             })
-            .collect()
+            .collect()*/
+
+        vec.into_iter()
     }
 }
 

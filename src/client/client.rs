@@ -1,9 +1,9 @@
 use crate::client::{GameRenderState, GameUpdateState};
 use crate::time::*;
-use crate::Window;
+use crate::{InputEvent, Window};
 use std::path::Path;
 
-pub struct Client {
+pub struct Client<'a> {
     // Misc.
     server_port: u16,
 
@@ -13,7 +13,7 @@ pub struct Client {
 
     // Render.
     render_ts: u64,
-    render_state: GameRenderState,
+    render_state: GameRenderState<'a>,
 
     // Diagnostic.
     acc_n: u64,
@@ -23,8 +23,8 @@ pub struct Client {
     render_acc: u64,
 }
 
-impl Client {
-    pub fn new(root: &'static Path, server_port: u16) -> Self {
+impl<'a> Client<'a> {
+    pub fn new(root: &'static Path, server_port: u16, window: &'a Window) -> Self {
         Self {
             server_port,
 
@@ -32,7 +32,7 @@ impl Client {
             update_state: GameUpdateState::new(root),
 
             render_ts: crate::timestamp_as_usecs(),
-            render_state: GameRenderState::new(root),
+            render_state: GameRenderState::new(root, window),
 
             acc_n: 0,
             prestep_acc: 0,
@@ -42,7 +42,11 @@ impl Client {
         }
     }
 
-    pub fn update_once(&mut self, window: &mut Window) -> bool {
+    pub fn update_once(
+        &mut self,
+        window: &'a Window,
+        input_events: impl Iterator<Item = InputEvent>,
+    ) -> bool {
         let frametime = 16666_u64;
 
         //
@@ -51,15 +55,10 @@ impl Client {
             return false;
         }
 
-        // Get inputs.
-        let input_events = window.poll();
-
         // Prestep.
         let ts = timestamp_as_usecs();
         {
-            let end = self
-                .update_state
-                .prestep(self.update_ts, input_events.into_iter());
+            let end = self.update_state.prestep(self.update_ts, input_events);
             if end {
                 return true;
             }
