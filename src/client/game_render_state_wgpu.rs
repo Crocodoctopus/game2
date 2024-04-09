@@ -669,20 +669,18 @@ impl GameRenderStateWgpu {
     pub fn render(&mut self, _ts: u64, game_frame: GameFrame) {
         // View mat3.
         let view = {
-            let view = Mat4::identity();
+            let view = Mat3::identity();
             let view = view
-                * scaling(&Vec3::new(
+                * scaling2d(&Vec2::new(
                      2. / game_frame.viewport_w,
                      -2. / game_frame.viewport_h,
-                    1.0,
                 ));
             let view = view
-                * translation(&Vec3::new(
+                * translation2d(&Vec2::new(
                     -game_frame.viewport_x - game_frame.viewport_w / 2.,
                     -game_frame.viewport_y - game_frame.viewport_h / 2.,
-                    0.0,
                 ));
-            view
+            nalgebra_glm::mat3_to_mat4(&view)
         };
         self.camera_uniform.view_matrix = view.into();
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
