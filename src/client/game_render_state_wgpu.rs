@@ -41,6 +41,25 @@ impl TileVertex {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct LightVertex {
+    light_xy: [f32; 2],
+}
+
+impl LightVertex {
+    const VAO: &'static [wgpu::VertexAttribute] = 
+        &wgpu::vertex_attr_array![0 => Float32x2];
+
+    const fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TileVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: Self::VAO,
+        }
+    }
+}
+
+#[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
     view_matrix: [[f32; 4]; 4],
@@ -61,10 +80,12 @@ pub struct GameRenderStateWgpu {
     config: wgpu::SurfaceConfiguration,
     size: (i32, i32),
 
-    render_pipeline: wgpu::RenderPipeline,
+    tile_render_pipeline: wgpu::RenderPipeline,
+    light_render_pipeline: wgpu::RenderPipeline,
 
     fg_vertex_buffer: wgpu::Buffer,
     bg_vertex_buffer: wgpu::Buffer,
+    light_vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
 
@@ -77,6 +98,9 @@ pub struct GameRenderStateWgpu {
     tile_uniform_bind_group: wgpu::BindGroup,
 
     tile_texture_bind_group: wgpu::BindGroup,
+    
+    light_texture_bind_group: wgpu::BindGroup,
+    light_texture: wgpu::Texture,
 }
 
 impl GameRenderStateWgpu {
@@ -240,8 +264,34 @@ impl GameRenderStateWgpu {
             texture
         };
 
+        let light_texture = {
+            // Load 
+            // No idea, it's dynamic
+            let (width, height) = (256, 256);
+            let texture_size = wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            };
+            let texture = device.create_texture(
+                &wgpu::TextureDescriptor {
+                    size: texture_size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Uint,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    label: Some("light_texture"),
+                    view_formats: &[],
+                }
+            );
+
+            texture
+        };
+
         let tile_sheet_texture_view = tile_sheet.create_view(&wgpu::TextureViewDescriptor::default());
         let mask_sheet_texture_view = mask_sheet.create_view(&wgpu::TextureViewDescriptor::default());
+        let light_texture_view = light_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
@@ -307,8 +357,51 @@ impl GameRenderStateWgpu {
                     label: Some("tile_sheet_bind_group"),
                 }
             );
+
+        let light_texture_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Uint,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        // This should match the filterable field of the
+                        // corresponding Texture entry above.
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+                label: Some("light_texture_bind_group_layout"),
+            });
+
+        let light_texture_bind_group = device.create_bind_group(
+                &wgpu::BindGroupDescriptor {
+                    layout: &light_texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&light_texture_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(&texture_sampler),
+                        }
+                    ],
+                    label: Some("light_texture_bind_group"),
+                }
+            );
             
-        let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/tile.wgsl"));
+        let tile_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/tile.wgsl"));
+        let light_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/light.wgsl"));
 
         let camera_uniform = CameraUniform {
             view_matrix: Mat4::identity().into(),
@@ -388,7 +481,7 @@ impl GameRenderStateWgpu {
             label: Some("tile_uniform_bind_group"),
         });
 
-        let render_pipeline_layout =
+        let tile_render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
                 bind_group_layouts: &[
@@ -399,18 +492,68 @@ impl GameRenderStateWgpu {
                 push_constant_ranges: &[],
         });
 
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let light_render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Light Render Pipeline Layout"),
+                bind_group_layouts: &[
+                    &camera_bind_group_layout,
+                    &light_texture_bind_group_layout,
+                ],
+                push_constant_ranges: &[],
+        });
+
+        let tile_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
+            layout: Some(&tile_render_pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &tile_shader,
                 entry_point: "vs_main",
                 buffers: &[
                     TileVertex::desc(),
                 ],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: &tile_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: Some(wgpu::IndexFormat::Uint16),
+                front_face: wgpu::FrontFace::Cw,
+                cull_mode: None,//Some(wgpu::Face::Back),
+                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                polygon_mode: wgpu::PolygonMode::Fill,
+                // Requires Features::DEPTH_CLIP_CONTROL
+                unclipped_depth: false,
+                // Requires Features::CONSERVATIVE_RASTERIZATION
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+        });
+
+        let light_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Light Render Pipeline"),
+            layout: Some(&light_render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &light_shader,
+                entry_point: "vs_main",
+                buffers: &[
+                    TileVertex::desc(),
+                ],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &light_shader,
                 entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
@@ -440,6 +583,7 @@ impl GameRenderStateWgpu {
         });
 
         let vertex_data: Vec<TileVertex> = vec![];
+        let light_vertex_data: Vec<LightVertex> = vec![];
 
         #[rustfmt::skip]
         let ibo_data: Vec<u16> = (0..13107)
@@ -448,8 +592,6 @@ impl GameRenderStateWgpu {
             //.flat_map(|i| [4 * i + 0, 4 * i + 1, 4 * i + 2, 4 * i + 3, u16::MAX])
             .collect();
         assert_eq!(ibo_data.len(), 65535);
-
-
 
         let fg_vertex_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
@@ -462,6 +604,13 @@ impl GameRenderStateWgpu {
             &wgpu::util::BufferInitDescriptor {
                 label: Some("BG Vertex Buffer"),
                 contents: bytemuck::cast_slice(&vertex_data),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+        let light_vertex_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Light Vertex Buffer"),
+                contents: bytemuck::cast_slice(&light_vertex_data),
                 usage: wgpu::BufferUsages::VERTEX,
             }
         );
@@ -483,9 +632,11 @@ impl GameRenderStateWgpu {
             queue,
             config,
             size,
-            render_pipeline,
+            tile_render_pipeline,
+            light_render_pipeline,
             fg_vertex_buffer,
             bg_vertex_buffer,
+            light_vertex_buffer,
             index_buffer,
             num_indices,
             camera_uniform,
@@ -495,6 +646,8 @@ impl GameRenderStateWgpu {
             tile_uniform_buffer,
             tile_uniform_bind_group,
             tile_texture_bind_group,
+            light_texture_bind_group,
+            light_texture,
         }
     }
 
@@ -519,8 +672,8 @@ impl GameRenderStateWgpu {
             let view = Mat4::identity();
             let view = view
                 * scaling(&Vec3::new(
-                    2. / game_frame.viewport_w,
-                    -2. / game_frame.viewport_h,
+                     2. / game_frame.viewport_w,
+                     -2. / game_frame.viewport_h,
                     1.0,
                 ));
             let view = view
@@ -650,18 +803,64 @@ impl GameRenderStateWgpu {
             };
         }
 
-        /*
         // Render lighting.
+        let mut light_vertices = vec![];
         {
             // Set up.
             #[rustfmt::skip]
             let _ = unsafe {
-                let mut rgb = vec![0u8; game_frame.light_w  * game_frame.light_h * 3];
+                let mut rgba = vec![0u8; game_frame.light_w  * game_frame.light_h * 4];
                 for i in 0 .. game_frame.light_w  * game_frame.light_h  {
-                    rgb[3 * i + 0] = game_frame.r_channel[i];
-                    rgb[3 * i + 1] = game_frame.g_channel[i];
-                    rgb[3 * i + 2] = game_frame.b_channel[i];
+                    rgba[4 * i + 0] = game_frame.r_channel[i];
+                    rgba[4 * i + 1] = game_frame.g_channel[i];
+                    rgba[4 * i + 2] = game_frame.b_channel[i];
+                    rgba[4 * i + 3] = 255;
                 }
+                light_vertices.push(
+                    LightVertex {
+                        light_xy: [game_frame.light_x as f32 * 16., game_frame.light_y as f32 * 16.],
+                    },
+                );
+                light_vertices.push(
+                    LightVertex {
+                        light_xy: [(game_frame.light_x + game_frame.light_w) as f32 * 16., game_frame.light_y as f32 * 16.],
+                    },
+                );
+                light_vertices.push(
+                    LightVertex {
+                        light_xy: [(game_frame.light_x + game_frame.light_w) as f32 * 16., (game_frame.light_y + game_frame.light_h) as f32 * 16.],
+                    },
+                );
+                light_vertices.push(
+                    LightVertex {
+                        light_xy: [game_frame.light_x as f32 * 16., (game_frame.light_y + game_frame.light_h) as f32 * 16.],
+                    },
+                );
+                // TODO:
+                let texture_size = wgpu::Extent3d {
+                    height: game_frame.light_h as u32,
+                    width: game_frame.light_w as u32,
+                    depth_or_array_layers: 1,
+                };
+                self.queue.write_texture(
+                    // Tells wgpu where to copy the pixel data
+                    wgpu::ImageCopyTexture {
+                        texture: &self.light_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    // The actual pixel data
+                    &rgba,
+                    // The layout of the texture
+                    wgpu::ImageDataLayout {
+                        offset: 0,
+                        bytes_per_row: Some(4 * game_frame.light_w as u32),
+                        rows_per_image: Some(game_frame.light_h as u32),
+                    },
+                    texture_size,
+                );
+                /*
                 gl::BindTexture(gl::TEXTURE_2D, self.light_tex);
                 //.gl::PixelStorei(gl::UNPACK_ALIGNMENT, 4);
                 gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RGB8UI as GLint, game_frame.light_w as GLint, game_frame.light_h as GLint, 0, gl::RGB_INTEGER, gl::UNSIGNED_BYTE, rgb.as_ptr() as *const GLvoid);
@@ -675,9 +874,11 @@ impl GameRenderStateWgpu {
                     Vec2::new(game_frame.light_x as f32 * 16.,                        (game_frame.light_y + game_frame.light_h) as f32 * 16.), ];
                 gl::BindBuffer(gl::ARRAY_BUFFER, self.light_xy);
                 gl::BufferData(gl::ARRAY_BUFFER, 4 * 2 * 4, xy.as_ptr() as *const GLvoid, gl::STATIC_DRAW); 
+                */
             };
 
             // Draw.
+            /*
             #[rustfmt::skip]
             let _ = unsafe {
                 use std::mem::size_of;
@@ -701,8 +902,9 @@ impl GameRenderStateWgpu {
                 gl::BindVertexArray(0);
                 gl::Disable(gl::BLEND);
             };
+            */
         }
-        */
+
         let output = self.surface.get_current_texture().unwrap();//?;
 
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -725,6 +927,14 @@ impl GameRenderStateWgpu {
             &wgpu::util::BufferInitDescriptor {
                 label: Some("BG Vertex Buffer"),
                 contents: bytemuck::cast_slice(&bg_vertex_tiles),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+        self.light_vertex_buffer.destroy();
+        self.light_vertex_buffer = self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Light Vertex Buffer"),
+                contents: bytemuck::cast_slice(&light_vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             }
         );
@@ -755,7 +965,7 @@ impl GameRenderStateWgpu {
 
             self.tile_uniform.mul_rgb = [1.0, 1.0, 1.0];
             self.queue.write_buffer(&self.tile_uniform_buffer, 0, bytemuck::cast_slice(&[self.tile_uniform]));
-            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_pipeline(&self.tile_render_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_bind_group(1, &self.tile_texture_bind_group, &[]);
             render_pass.set_bind_group(2, &self.tile_uniform_bind_group, &[]);
@@ -779,6 +989,16 @@ impl GameRenderStateWgpu {
 
             let idx_val = std::cmp::min(self.num_indices, fg_vertex_tiles.len() as u32);
             render_pass.draw_indexed(0..idx_val, 0, 0..1);
+
+            // Light!
+            render_pass.set_pipeline(&self.light_render_pipeline);
+            //render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
+            render_pass.set_vertex_buffer(0, self.light_vertex_buffer.slice(..));
+            render_pass.set_bind_group(1, &self.light_texture_bind_group, &[]);
+            // TODO: light texture stuff
+            let idx_val = std::cmp::min(self.num_indices, light_vertices.len() as u32);
+            render_pass.draw_indexed(0..idx_val, 0, 0..1);
+
         }
 
 
