@@ -4,7 +4,7 @@ struct CameraUniform {
 @group(0) @binding(0)
 var<uniform> camera: CameraUniform;
 
-struct FragmentInput {
+struct VertexInput {
     @location(0) tile_xyz: vec3<f32>,
     @location(1) tile_uv: vec2<f32>,
     @location(2) mask_uv: vec2<f32>,
@@ -19,7 +19,7 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(
-    in: FragmentInput,
+    in: VertexInput,
 ) -> VertexOutput {
     var out: VertexOutput;
     out.tile_uv = in.tile_uv;

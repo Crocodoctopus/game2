@@ -544,13 +544,7 @@ impl GameRenderStateWgpu {
             }
 
             // Calculate tile data and upload to GPU.
-            let (fg_count, bg_count) = 'calc_tiles: {
-                /*
-                let mut bg_tile_xyz = Vec::with_capacity(4 * max_tiles);
-                let mut bg_tile_uv = Vec::with_capacity(4 * max_tiles);
-                let mut bg_mask_uv = Vec::with_capacity(4 * max_tiles);
-                */
-
+            'calc_tiles: {
                 for y in 1..game_frame.tiles_h - 1 {
                     'x: for x in 1..game_frame.tiles_w - 1 {
                         let index = x + y * game_frame.tiles_w;
@@ -648,107 +642,12 @@ impl GameRenderStateWgpu {
                                 tile_uv:  [0. + uv_tx,  16.],
                                 mask_uv:  [u,      v + 4.],
                             });
-                            /*
-                            #[rustfmt::skip]
-                            bg_tile_xyz.extend_from_slice(&[
-                                Vec3::new(tx - 8.,       ty - 8.,       tile as f32),
-                                Vec3::new(tx + 16. + 8., ty - 8.,       tile as f32),
-                                Vec3::new(tx + 16. + 8., ty + 16. + 8., tile as f32),
-                                Vec3::new(tx - 8.,       ty + 16. + 8., tile as f32), ]);
-
-                            // Fill uv data.
-                            #[rustfmt::skip]
-                            bg_tile_uv.extend_from_slice(&[
-                                Vec2::new(uv_tx,       0. ),
-                                Vec2::new(16. + uv_tx, 0. ),
-                                Vec2::new(16. + uv_tx, 16.),
-                                Vec2::new(0. + uv_tx,  16.), ]);
-                                */
-
-                            // Fill mask uv data.
-                            /*
-
-                            #[rustfmt::skip]
-                            bg_mask_uv.extend_from_slice(&[
-                                Vec2::new(u,      v     ),
-                                Vec2::new(u + 4., v     ),
-                                Vec2::new(u + 4., v + 4.),
-                                Vec2::new(u,      v + 4.), ]);
-                                */
                         }
                     }
                 }
 
-                /*
-                //
-                #[rustfmt::skip]
-                let _ = unsafe {
-                    use std::mem::size_of;
-                    let fg_count = fg_tile_xyz.len();
-                   
-                    gl::BindBuffer(gl::ARRAY_BUFFER, self.fg_tile_xyz);
-                    gl::BufferData(gl::ARRAY_BUFFER, (fg_count * size_of::<Vec3>()) as GLsizeiptr, fg_tile_xyz.as_ptr() as *const GLvoid, gl::STATIC_DRAW);
-                    gl::BindBuffer(gl::ARRAY_BUFFER, self.fg_tile_uv);
-                    gl::BufferData(gl::ARRAY_BUFFER, (fg_count * size_of::<Vec2>()) as GLsizeiptr, fg_tile_uv.as_ptr() as *const GLvoid, gl::STATIC_DRAW);                    
-                    gl::BindBuffer(gl::ARRAY_BUFFER, self.fg_mask_uv);
-                    gl::BufferData(gl::ARRAY_BUFFER, (fg_count * size_of::<Vec2>()) as GLsizeiptr, fg_mask_uv.as_ptr() as *const GLvoid, gl::STATIC_DRAW);
-
-                    let bg_count = bg_tile_xyz.len();
-                    gl::BindBuffer(gl::ARRAY_BUFFER, self.bg_tile_xyz);
-                    gl::BufferData(gl::ARRAY_BUFFER, (bg_count * size_of::<Vec3>()) as GLsizeiptr, bg_tile_xyz.as_ptr() as *const GLvoid, gl::STATIC_DRAW);
-                    gl::BindBuffer(gl::ARRAY_BUFFER, self.bg_tile_uv); 
-                    gl::BufferData(gl::ARRAY_BUFFER, (bg_count * size_of::<Vec2>()) as GLsizeiptr, bg_tile_uv.as_ptr() as *const GLvoid, gl::STATIC_DRAW); 
-                    gl::BindBuffer(gl::ARRAY_BUFFER, self.bg_mask_uv); 
-                    gl::BufferData(gl::ARRAY_BUFFER, (bg_count * size_of::<Vec2>()) as GLsizeiptr, bg_mask_uv.as_ptr() as *const GLvoid, gl::STATIC_DRAW);
-
-                    break 'calc_tiles (fg_count / 4, bg_count / 4)
-                };
-                */
-
-                let fg_count = 0;
-                let bg_count = 0; //bg_tile_xyz.len();
-                break 'calc_tiles (fg_count / 4, bg_count / 4)
+                break 'calc_tiles
             };
-            /*
-            // Draw.
-            #[rustfmt::skip]
-            let _ = unsafe {
-                use std::mem::size_of;
-
-                gl::Enable(gl::PRIMITIVE_RESTART);
-                gl::PrimitiveRestartIndex(u16::MAX as GLuint);
-
-                gl::ActiveTexture(gl::TEXTURE0 + 0);
-                gl::BindTexture(gl::TEXTURE_2D, self.tile_sheet);
-                gl::ActiveTexture(gl::TEXTURE0 + 1);
-                gl::BindTexture(gl::TEXTURE_2D, self.mask_sheet);
-
-                // Program state.
-                gl::BindVertexArray(self.tile_vao);
-                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.quad_ibo); 
-                gl::UseProgram(self.tile_program);
-
-                // BG
-                gl::BindVertexBuffer(0, self.bg_tile_xyz, 0, size_of::<Vec3>() as GLint);
-                gl::BindVertexBuffer(1, self.bg_tile_uv, 0, size_of::<Vec2>() as GLint);
-                gl::BindVertexBuffer(2, self.bg_mask_uv, 0, size_of::<Vec2>() as GLint);
-                gl::Uniform1i(0, 0);
-                gl::Uniform1i(1, 1);
-                gl::Uniform3f(2, 0.6, 0.6, 0.7);
-                gl::UniformMatrix3fv(3, 1, gl::FALSE, view.as_ptr());
-                gl::DrawElements(gl::TRIANGLE_FAN, (5 * bg_count) as GLsizei, gl::UNSIGNED_SHORT as GLenum, std::ptr::null()); 
-
-                // FG
-                gl::BindVertexBuffer(0, self.fg_tile_xyz, 0, size_of::<Vec3>() as GLint);
-                gl::BindVertexBuffer(1, self.fg_tile_uv, 0, size_of::<Vec2>() as GLint);
-                gl::BindVertexBuffer(2, self.fg_mask_uv, 0, size_of::<Vec2>() as GLint);
-                gl::Uniform3f(2, 1., 1., 1.);
-                gl::DrawElements(gl::TRIANGLE_FAN, (5 * fg_count) as GLsizei, gl::UNSIGNED_SHORT as GLenum, std::ptr::null());
-            
-                gl::BindVertexArray(0);
-                
-            };
-            */
         }
 
         /*
