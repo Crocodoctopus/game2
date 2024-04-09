@@ -319,7 +319,7 @@ impl GameRenderStateWgpu {
                             resource: wgpu::BindingResource::Sampler(&texture_sampler),
                         }
                     ],
-                    label: Some("diffuse_bind_group"),
+                    label: Some("tile_sheet_bind_group"),
                 }
             );
             
@@ -336,7 +336,7 @@ impl GameRenderStateWgpu {
                             resource: wgpu::BindingResource::Sampler(&texture_sampler),
                         }
                     ],
-                    label: Some("diffuse_bind_group"),
+                    label: Some("mask_sheet_bind_group"),
                 }
             );
 
@@ -414,7 +414,7 @@ impl GameRenderStateWgpu {
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
+                strip_index_format: Some(wgpu::IndexFormat::Uint16),
                 front_face: wgpu::FrontFace::Cw,
                 cull_mode: None,//Some(wgpu::Face::Back),
                 // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
@@ -568,17 +568,17 @@ impl GameRenderStateWgpu {
                             });
                             vertex_tiles.push(TileVertex {
                                 tile_xyz: [tx + 16. + 8., ty - 8.,       tile as f32],
-                                tile_uv:  [16. + tx, 0.],
+                                tile_uv:  [16. + uv_tx, 0.],
                                 mask_uv:  [u + 4., v],
                             });
                             vertex_tiles.push(TileVertex {
                                 tile_xyz: [tx + 16. + 8., ty + 16. + 8., tile as f32],
-                                tile_uv:  [16. + tx, 16.],
+                                tile_uv:  [16. + uv_tx, 16.],
                                 mask_uv:  [u + 4., v + 4.],
                             });
                             vertex_tiles.push(TileVertex {
                                 tile_xyz: [tx - 8.,       ty + 16. + 8., tile as f32],
-                                tile_uv:  [0. + tx,  16.],
+                                tile_uv:  [0. + uv_tx,  16.],
                                 mask_uv:  [u,      v + 4.],
                             });
 
