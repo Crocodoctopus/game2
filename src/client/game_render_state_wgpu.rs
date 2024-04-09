@@ -372,7 +372,7 @@ impl GameRenderStateWgpu {
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
-                        binding: 2,
+                        binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         // This should match the filterable field of the
                         // corresponding Texture entry above.
@@ -392,7 +392,7 @@ impl GameRenderStateWgpu {
                             resource: wgpu::BindingResource::TextureView(&light_texture_view),
                         },
                         wgpu::BindGroupEntry {
-                            binding: 2,
+                            binding: 1,
                             resource: wgpu::BindingResource::Sampler(&texture_sampler),
                         }
                     ],
@@ -560,12 +560,12 @@ impl GameRenderStateWgpu {
                     blend: Some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
                             src_factor: wgpu::BlendFactor::Src,
-                            dst_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::Dst,
                             operation: wgpu::BlendOperation::Add,
                         },
                         alpha: wgpu::BlendComponent {
                             src_factor: wgpu::BlendFactor::Src,
-                            dst_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::Dst,
                             operation: wgpu::BlendOperation::Add,
                         },
                     }),
@@ -816,75 +816,57 @@ impl GameRenderStateWgpu {
         let mut light_vertices = vec![];
         {
             // Set up.
-            #[rustfmt::skip]
-            let _ = unsafe {
-                let mut rgba = vec![0u8; game_frame.light_w  * game_frame.light_h * 4];
-                for i in 0 .. game_frame.light_w  * game_frame.light_h  {
-                    rgba[4 * i + 0] = game_frame.r_channel[i];
-                    rgba[4 * i + 1] = game_frame.g_channel[i];
-                    rgba[4 * i + 2] = game_frame.b_channel[i];
-                    rgba[4 * i + 3] = 255;
-                }
-                light_vertices.push(
-                    LightVertex {
-                        light_xy: [game_frame.light_x as f32 * 16., game_frame.light_y as f32 * 16.],
-                    },
-                );
-                light_vertices.push(
-                    LightVertex {
-                        light_xy: [(game_frame.light_x + game_frame.light_w) as f32 * 16., game_frame.light_y as f32 * 16.],
-                    },
-                );
-                light_vertices.push(
-                    LightVertex {
-                        light_xy: [(game_frame.light_x + game_frame.light_w) as f32 * 16., (game_frame.light_y + game_frame.light_h) as f32 * 16.],
-                    },
-                );
-                light_vertices.push(
-                    LightVertex {
-                        light_xy: [game_frame.light_x as f32 * 16., (game_frame.light_y + game_frame.light_h) as f32 * 16.],
-                    },
-                );
-                // TODO:
-                let texture_size = wgpu::Extent3d {
-                    height: game_frame.light_h as u32,
-                    width: game_frame.light_w as u32,
-                    depth_or_array_layers: 1,
-                };
-                self.queue.write_texture(
-                    // Tells wgpu where to copy the pixel data
-                    wgpu::ImageCopyTexture {
-                        texture: &self.light_texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    // The actual pixel data
-                    &rgba,
-                    // The layout of the texture
-                    wgpu::ImageDataLayout {
-                        offset: 0,
-                        bytes_per_row: Some(4 * game_frame.light_w as u32),
-                        rows_per_image: Some(game_frame.light_h as u32),
-                    },
-                    texture_size,
-                );
-                /*
-                gl::BindTexture(gl::TEXTURE_2D, self.light_tex);
-                //.gl::PixelStorei(gl::UNPACK_ALIGNMENT, 4);
-                gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RGB8UI as GLint, game_frame.light_w as GLint, game_frame.light_h as GLint, 0, gl::RGB_INTEGER, gl::UNSIGNED_BYTE, rgb.as_ptr() as *const GLvoid);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as GLint);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as GLint);
-
-                let xy = [
-                    Vec2::new(game_frame.light_x as f32 * 16.,                        game_frame.light_y as f32 * 16.                       ),
-                    Vec2::new((game_frame.light_x + game_frame.light_w) as f32 * 16., game_frame.light_y as f32 * 16.                       ),
-                    Vec2::new((game_frame.light_x + game_frame.light_w) as f32 * 16., (game_frame.light_y + game_frame.light_h) as f32 * 16.),
-                    Vec2::new(game_frame.light_x as f32 * 16.,                        (game_frame.light_y + game_frame.light_h) as f32 * 16.), ];
-                gl::BindBuffer(gl::ARRAY_BUFFER, self.light_xy);
-                gl::BufferData(gl::ARRAY_BUFFER, 4 * 2 * 4, xy.as_ptr() as *const GLvoid, gl::STATIC_DRAW); 
-                */
+            let mut rgba = vec![0u8; game_frame.light_w  * game_frame.light_h * 4];
+            for i in 0 .. game_frame.light_w  * game_frame.light_h  {
+                rgba[4 * i + 0] = game_frame.r_channel[i];
+                rgba[4 * i + 1] = game_frame.g_channel[i];
+                rgba[4 * i + 2] = game_frame.b_channel[i];
+                rgba[4 * i + 3] = 255;
+            }
+            light_vertices.push(
+                LightVertex {
+                    light_xy: [game_frame.light_x as f32 * 16., game_frame.light_y as f32 * 16.],
+                },
+            );
+            light_vertices.push(
+                LightVertex {
+                    light_xy: [(game_frame.light_x + game_frame.light_w) as f32 * 16., game_frame.light_y as f32 * 16.],
+                },
+            );
+            light_vertices.push(
+                LightVertex {
+                    light_xy: [(game_frame.light_x + game_frame.light_w) as f32 * 16., (game_frame.light_y + game_frame.light_h) as f32 * 16.],
+                },
+            );
+            light_vertices.push(
+                LightVertex {
+                    light_xy: [game_frame.light_x as f32 * 16., (game_frame.light_y + game_frame.light_h) as f32 * 16.],
+                },
+            );
+            // TODO:
+            let texture_size = wgpu::Extent3d {
+                height: game_frame.light_h as u32,
+                width: game_frame.light_w as u32,
+                depth_or_array_layers: 1,
             };
+            self.queue.write_texture(
+                // Tells wgpu where to copy the pixel data
+                wgpu::ImageCopyTexture {
+                    texture: &self.light_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                // The actual pixel data
+                &rgba,
+                // The layout of the texture
+                wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * game_frame.light_w as u32),
+                    rows_per_image: Some(game_frame.light_h as u32),
+                },
+                texture_size,
+            );
 
             // Draw.
             /*
