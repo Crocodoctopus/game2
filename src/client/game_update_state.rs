@@ -4,8 +4,6 @@ use std::path::Path;
 use std::collections::HashSet;
 use rand::Rng;
 
-use super::game_frame;
-
 pub struct GameUpdateState {
     world_w: usize,
     world_h: usize,
@@ -66,7 +64,8 @@ impl GameUpdateState {
             }
         }
 
-        fg_tiles = crate::shared::terrain_gen::generate_terrain(world_w, world_h, 0);
+        // Don't generate on first pass because it lags debug mode
+        //fg_tiles = crate::shared::terrain_gen::generate_terrain(world_w, world_h, 0);
 
         Self {
             world_w,
@@ -152,16 +151,17 @@ impl GameUpdateState {
             self.camera_update_dir.0 = 0.;
         }
 
-        const CAMERA_SPEED: f32 = 100.;
+        const CAMERA_SPEED: f32 = 200.;
 
         self.camera_pos.0 += self.camera_update_dir.0 * CAMERA_SPEED * (ft as f32 / 1_000_000.);
         self.camera_pos.1 += self.camera_update_dir.1 * CAMERA_SPEED * (ft as f32 / 1_000_000.);
-
+        self.camera_pos.0 = self.camera_pos.0.clamp(16., self.world_w as f32 - 16.);
+        self.camera_pos.1 = self.camera_pos.1.clamp(16., self.world_h as f32 - 16.);
     }
 
     pub fn poststep(&mut self, ts: u64) -> GameFrame {
-        let viewport_x = 32_usize;
-        let viewport_y = 32_usize;
+        let viewport_x = self.camera_pos.0 as usize;
+        let viewport_y = self.camera_pos.1 as usize;
         let viewport_w = 1920_usize;
         let viewport_h = 1080_usize;
 
@@ -230,6 +230,9 @@ impl GameUpdateState {
                 for x in 0..w {
                     let src_index = (x + x1) + (y + y1) * self.world_w;
                     let dst_index = x + y * w;
+                    if src_index > self.fg_tiles.len() || dst_index > fg_tiles.len(){
+                        break;
+                    }
                     fg_tiles[dst_index] = self.fg_tiles[src_index];
                     bg_tiles[dst_index] = self.bg_tiles[src_index];
                 }
@@ -252,8 +255,8 @@ impl GameUpdateState {
         };
 
         GameFrame {
-            viewport_x: self.camera_pos.0,
-            viewport_y: self.camera_pos.1,
+            viewport_x: viewport_x as f32,
+            viewport_y: viewport_y as f32,
             viewport_w: 1920.,
             viewport_h: 1080.,
 
