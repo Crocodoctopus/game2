@@ -32,6 +32,10 @@ pub struct Client {
 
 impl Client {
     pub fn new(root: &'static Path, server_port: u16, window: &mut Window) -> Self {
+        #[cfg(feature = "opengl")]
+        let render_state = GameRenderState::new(root);
+        #[cfg(feature = "wgpu")]
+        let render_state = pollster::block_on(GameRenderState::new(root, window)).unwrap();
         Self {
             server_port,
 
@@ -39,7 +43,7 @@ impl Client {
             update_state: GameUpdateState::new(root),
 
             render_ts: crate::timestamp_as_usecs(),
-            render_state: GameRenderState::new(root, window),
+            render_state,
 
             acc_n: 0,
             prestep_acc: 0,

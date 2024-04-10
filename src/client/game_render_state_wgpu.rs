@@ -13,23 +13,8 @@ struct TileVertex {
 }
 
 impl TileVertex {
-    // NOTE: `wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];` is also valid
     const VAO: &'static [wgpu::VertexAttribute] = 
         &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x2];
-    /*
-    const VAO: &'static [wgpu::VertexAttribute] = &[
-        wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 0,
-            format: wgpu::VertexFormat::Float32x2,
-        },
-        wgpu::VertexAttribute {
-            offset: std::mem::offset_of!(TileVertex, mask_uv) as wgpu::BufferAddress,
-            shader_location: 1,
-            format: wgpu::VertexFormat::Float32x2,
-        },
-    ];
-    */
 
     const fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -77,6 +62,94 @@ struct LightUniform {
     texture_size: [u32; 2],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextureType {
+    Rgba8,
+    Gray,
+    Rgba8Uint,
+}
+
+impl TextureType {
+    fn format(self) -> wgpu::TextureFormat {
+        match self {
+            TextureType::Rgba8 => wgpu::TextureFormat::Rgba8UnormSrgb,
+            TextureType::Gray => wgpu::TextureFormat::R8Unorm,
+            TextureType::Rgba8Uint => wgpu::TextureFormat::Rgba8Uint,
+        }
+    }
+
+    fn byte_size(self) -> u32 {
+        match self {
+            TextureType::Rgba8 => 4,
+            TextureType::Gray => 1,
+            TextureType::Rgba8Uint => 4,
+        }
+    }
+}
+
+fn create_texture(device: &wgpu::Device, queue: &wgpu::Queue, bytes: &[u8], tt: TextureType, label: Option<&'static str>) -> anyhow::Result<wgpu::Texture> {
+    let image = image::load_from_memory(bytes)?;
+    let (width, height) = image.dimensions();
+    let data: Vec<u8>  = match tt {
+        TextureType::Gray => image.into_luma8().into_vec(),
+        TextureType::Rgba8 | TextureType::Rgba8Uint => image.into_rgba8().into_vec(),
+    };
+    let texture_size = wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(
+        &wgpu::TextureDescriptor {
+            size: texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: tt.format(),
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            label,
+            view_formats: &[],
+        }
+    );
+    queue.write_texture(
+        wgpu::ImageCopyTexture {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &data,
+        wgpu::ImageDataLayout {
+            offset: 0,
+            bytes_per_row: Some(width * tt.byte_size()),
+            rows_per_image: Some(height),
+        },
+        texture_size,
+    );
+    Ok(texture)
+}
+
+fn create_empty_texture(device: &wgpu::Device, (width, height): (u32, u32), tt: TextureType, label: Option<&'static str>) -> anyhow::Result<wgpu::Texture> {
+    let texture_size = wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(
+        &wgpu::TextureDescriptor {
+            size: texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: tt.format(),
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            label,
+            view_formats: &[],
+        }
+    );
+    Ok(texture)
+}
+
 pub struct GameRenderStateWgpu {
     instance: wgpu::Instance,
     // pure unsafe hackery
@@ -114,7 +187,7 @@ pub struct GameRenderStateWgpu {
 }
 
 impl GameRenderStateWgpu {
-    pub fn new(_root: &'static Path, window: &mut crate::window::Window) -> Self {
+    pub async fn new(_root: &'static Path, window: &mut crate::window::Window) -> anyhow::Result<Self> {
         let size = window.window.get_size();
         let scale = window.window.get_content_scale();
         let size = ((size.0 as f32 * scale.0) as i32, (size.1 as f32 * scale.1) as i32);
@@ -131,28 +204,26 @@ impl GameRenderStateWgpu {
         // # Safety
         //
         // The surface needs to live as long as the window that created it.
-        // State owns the window so this should be safe.
-        let surface = unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(&window.window).unwrap()) }.unwrap();
+        // FIXME: This is an unsafe hack that leaks into safe code.
+        let surface = unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(&window.window)?) }?;
 
-        //let adapter = instance.enumerate_adapters(wgpu::Backends::all()).first().unwrap();
-
-        let adapter = pollster::block_on( async {
-            instance.request_adapter(
+        let adapter =  instance.request_adapter(
             &wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             },
-        ).await.unwrap() });
+        ).await
+        .ok_or_else(|| anyhow::anyhow!("WGPU: No adapter found"))?;
 
-        let (device, queue) = pollster::block_on(async { adapter.request_device(
+        let (device, queue) = adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: None,
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
             },
-            None, // Trace path
-        ).await.unwrap() });
+            None,
+        ).await?;
  
         let surface_caps = surface.get_capabilities(&adapter);
         // Shader code in this tutorial assumes an sRGB surface texture. Using a different
@@ -176,128 +247,9 @@ impl GameRenderStateWgpu {
         };
         surface.configure(&device, &config);
 
-        let tile_sheet = {
-            // Load 
-            let image = image::load_from_memory(include_bytes!("../../resources/tile_sheet.png")).unwrap();
-            let data = image.as_rgba8().unwrap();
-            let (width, height) = image.dimensions();
-            let texture_size = wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            };
-            let texture = device.create_texture(
-                &wgpu::TextureDescriptor {
-                    // All textures are stored as 3D, we represent our 2D texture
-                    // by setting depth to 1.
-                    size: texture_size,
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    // Most images are stored using sRGB, so we need to reflect that here.
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    // TEXTURE_BINDING tells wgpu that we want to use this texture in shaders
-                    // COPY_DST means that we want to copy data to this texture
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    label: Some("tile_sheet"),
-                    // This is the same as with the SurfaceConfig. It
-                    // specifies what texture formats can be used to
-                    // create TextureViews for this texture. The base
-                    // texture format (Rgba8UnormSrgb in this case) is
-                    // always supported. Note that using a different
-                    // texture format is not supported on the WebGL2
-                    // backend.
-                    view_formats: &[],
-                }
-            );
-            queue.write_texture(
-                // Tells wgpu where to copy the pixel data
-                wgpu::ImageCopyTexture {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                // The actual pixel data
-                &data,
-                // The layout of the texture
-                wgpu::ImageDataLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * width),
-                    rows_per_image: Some(height),
-                },
-                texture_size,
-            );
-            texture
-        };
-
-        let mask_sheet = {
-            // Load 
-            let image = image::load_from_memory(include_bytes!("../../resources/mask_sheet.png")).unwrap();
-            let (width, height) = image.dimensions();
-            let data = image.into_luma8();
-            let texture_size = wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            };
-            let texture = device.create_texture(
-                &wgpu::TextureDescriptor {
-                    size: texture_size,
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::R8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    label: Some("mask_sheet"),
-                    view_formats: &[],
-                }
-            );
-            queue.write_texture(
-                // Tells wgpu where to copy the pixel data
-                wgpu::ImageCopyTexture {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                // The actual pixel data
-                &data,
-                // The layout of the texture
-                wgpu::ImageDataLayout {
-                    offset: 0,
-                    bytes_per_row: Some(width),
-                    rows_per_image: Some(height),
-                },
-                texture_size,
-            );
-            texture
-        };
-
-        let light_texture = {
-            // Load 
-            // No idea, it's dynamic
-            let (width, height) = (256, 256);
-            let texture_size = wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            };
-            let texture = device.create_texture(
-                &wgpu::TextureDescriptor {
-                    size: texture_size,
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Uint,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    label: Some("light_texture"),
-                    view_formats: &[],
-                }
-            );
-
-            texture
-        };
+        let tile_sheet = create_texture(&device, &queue, include_bytes!("../../resources/tile_sheet.png"), TextureType::Rgba8, Some("tile_sheet"))?;
+        let mask_sheet = create_texture(&device, &queue, include_bytes!("../../resources/mask_sheet.png"), TextureType::Gray, Some("mask_sheet"))?;
+        let light_texture = create_empty_texture(&device, (256, 256), TextureType::Rgba8Uint, Some("light_texture"))?;
 
         let tile_sheet_texture_view = tile_sheet.create_view(&wgpu::TextureViewDescriptor::default());
         let mask_sheet_texture_view = mask_sheet.create_view(&wgpu::TextureViewDescriptor::default());
@@ -650,7 +602,6 @@ impl GameRenderStateWgpu {
         let ibo_data: Vec<u16> = (0..13107)
             .into_iter()
             .flat_map(|i| [i * 4 + 0, i * 4 + 3, i * 4 + 1, i * 4 + 2, u16::MAX])
-            //.flat_map(|i| [4 * i + 0, 4 * i + 1, 4 * i + 2, 4 * i + 3, u16::MAX])
             .collect();
         assert_eq!(ibo_data.len(), 65535);
 
@@ -686,33 +637,35 @@ impl GameRenderStateWgpu {
         let num_indices = ibo_data.len() as u32;
 
 
-        Self {
-            instance,
-            surface,
-            device,
-            queue,
-            config,
-            size,
-            tile_render_pipeline,
-            light_render_pipeline,
-            fg_vertex_buffer,
-            bg_vertex_buffer,
-            light_vertex_buffer,
-            index_buffer,
-            num_indices,
-            camera_uniform,
-            camera_buffer,
-            camera_bind_group,
-            tile_uniform,
-            tile_uniform_buffer,
-            tile_uniform_bind_group,
-            tile_texture_bind_group,
-            light_uniform,
-            light_uniform_buffer,
-            light_uniform_bind_group,
-            light_texture_bind_group,
-            light_texture,
-        }
+        Ok(
+            Self {
+                instance,
+                surface,
+                device,
+                queue,
+                config,
+                size,
+                tile_render_pipeline,
+                light_render_pipeline,
+                fg_vertex_buffer,
+                bg_vertex_buffer,
+                light_vertex_buffer,
+                index_buffer,
+                num_indices,
+                camera_uniform,
+                camera_buffer,
+                camera_bind_group,
+                tile_uniform,
+                tile_uniform_buffer,
+                tile_uniform_bind_group,
+                tile_texture_bind_group,
+                light_uniform,
+                light_uniform_buffer,
+                light_uniform_bind_group,
+                light_texture_bind_group,
+                light_texture,
+            }
+        )
     }
 
     pub fn resize(&mut self, new_size: (i32, i32)) {
@@ -730,8 +683,7 @@ impl GameRenderStateWgpu {
         unsafe { self.instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(&window.window).unwrap()) }.unwrap();
     }
 
-    pub fn render(&mut self, _ts: u64, game_frame: GameFrame) {
-        // View mat3.
+    fn update_camera(&mut self, game_frame: &GameFrame) {
         let view = {
             let view = Mat3::identity();
             let view = view
@@ -748,7 +700,9 @@ impl GameRenderStateWgpu {
         };
         self.camera_uniform.view_matrix = view.into();
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
+    }
 
+    fn get_tile_vertices(&self, game_frame: &GameFrame) -> (Vec<TileVertex>, Vec<TileVertex>) {
         // Render tiles.
         let max_tiles = (game_frame.tiles_w - 2) * (game_frame.tiles_h - 2);
         let mut fg_vertex_tiles = Vec::with_capacity(max_tiles);
@@ -864,7 +818,34 @@ impl GameRenderStateWgpu {
                 break 'calc_tiles
             };
         }
+        (fg_vertex_tiles, bg_vertex_tiles)
+    }
 
+    fn update_tiles(&mut self, game_frame: &GameFrame) -> (Vec<TileVertex>, Vec<TileVertex>) {
+        let (fg_vertex_tiles, bg_vertex_tiles) = self.get_tile_vertices(game_frame);
+
+        // TODO: test if copying is faster than updating if we care
+        self.fg_vertex_buffer.destroy();
+        self.fg_vertex_buffer = self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("FG Vertex Buffer"),
+                contents: bytemuck::cast_slice(&fg_vertex_tiles),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+        self.bg_vertex_buffer.destroy();
+        self.bg_vertex_buffer = self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("BG Vertex Buffer"),
+                contents: bytemuck::cast_slice(&bg_vertex_tiles),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+
+        (fg_vertex_tiles, bg_vertex_tiles)
+    }
+
+    fn update_lighting(&mut self, game_frame: &GameFrame) -> Vec<LightVertex> {
         // Render lighting.
         let mut light_vertices = vec![];
         self.light_uniform.texture_size = [game_frame.light_w as u32, game_frame.light_h as u32];
@@ -922,60 +903,7 @@ impl GameRenderStateWgpu {
                 },
                 texture_size,
             );
-
-            // Draw.
-            /*
-            #[rustfmt::skip]
-            let _ = unsafe {
-                use std::mem::size_of;
-
-                gl::Enable(gl::BLEND);
-                gl::BlendEquationSeparate(gl::FUNC_ADD, gl::FUNC_ADD);
-                gl::BlendFunc(gl::DST_COLOR, gl::ZERO);
-
-                gl::ActiveTexture(gl::TEXTURE0 + 0);
-                gl::BindTexture(gl::TEXTURE_2D, self.light_tex);
-
-                gl::BindVertexArray(self.light_vao);
-                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.quad_ibo);
-                gl::BindVertexBuffer(0, self.light_xy, 0, size_of::<Vec2>() as GLint);
-
-                gl::UseProgram(self.light_program);
-                gl::Uniform1i(0, 0);
-                gl::UniformMatrix3fv(1, 1, gl::FALSE, view.as_ptr());
-                gl::DrawElements(gl::TRIANGLE_FAN, 5, gl::UNSIGNED_SHORT, std::ptr::null());
-
-                gl::BindVertexArray(0);
-                gl::Disable(gl::BLEND);
-            };
-            */
         }
-
-        let output = self.surface.get_current_texture().unwrap();//?;
-
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
-
-        // TODO: test if copying is faster than updating if we care
-        self.fg_vertex_buffer.destroy();
-        self.fg_vertex_buffer = self.device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("FG Vertex Buffer"),
-                contents: bytemuck::cast_slice(&fg_vertex_tiles),
-                usage: wgpu::BufferUsages::VERTEX,
-            }
-        );
-        self.bg_vertex_buffer.destroy();
-        self.bg_vertex_buffer = self.device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("BG Vertex Buffer"),
-                contents: bytemuck::cast_slice(&bg_vertex_tiles),
-                usage: wgpu::BufferUsages::VERTEX,
-            }
-        );
         self.light_vertex_buffer.destroy();
         self.light_vertex_buffer = self.device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
@@ -984,6 +912,19 @@ impl GameRenderStateWgpu {
                 usage: wgpu::BufferUsages::VERTEX,
             }
         );
+        light_vertices
+    }
+
+    pub fn render(&mut self, _ts: u64, game_frame: GameFrame) {
+        self.update_camera(&game_frame);
+        let (fg_vertex_tiles, bg_vertex_tiles) = self.update_tiles(&game_frame);
+        let light_vertices = self.update_lighting(&game_frame);
+
+        let output = self.surface.get_current_texture().unwrap();//?;
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Render Encoder"),
+        });
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1009,8 +950,7 @@ impl GameRenderStateWgpu {
             });
 
 
-            self.tile_uniform.mul_rgb = [1.0, 1.0, 1.0];
-            self.queue.write_buffer(&self.tile_uniform_buffer, 0, bytemuck::cast_slice(&[self.tile_uniform]));
+            // background tiles
             render_pass.set_pipeline(&self.tile_render_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_bind_group(1, &self.tile_texture_bind_group, &[]);
@@ -1020,7 +960,7 @@ impl GameRenderStateWgpu {
             assert!(self.num_indices >= fg_vertex_tiles.len() as u32, "Ran out of indices in the IBO!");
             assert!(self.num_indices >= bg_vertex_tiles.len() as u32, "Ran out of indices in the IBO!");
 
-            // background tiles
+            // Update uniform for BG tile color
             self.tile_uniform.mul_rgb = [0.7, 0.7, 0.8];
             self.queue.write_buffer(&self.tile_uniform_buffer, 0, bytemuck::cast_slice(&[self.tile_uniform]));
             render_pass.set_vertex_buffer(0, self.bg_vertex_buffer.slice(..));
@@ -1030,6 +970,7 @@ impl GameRenderStateWgpu {
             render_pass.draw_indexed(0..idx_val, 0, 0..1);
 
             // foreground tiles
+            // We reuse the setup from above but change the uniform
             self.tile_uniform.mul_rgb = [1.0, 1.0, 1.0];
             self.queue.write_buffer(&self.tile_uniform_buffer, 0, bytemuck::cast_slice(&[self.tile_uniform]));
             render_pass.set_vertex_buffer(0, self.fg_vertex_buffer.slice(..));
@@ -1039,22 +980,18 @@ impl GameRenderStateWgpu {
             render_pass.draw_indexed(0..idx_val, 0, 0..1);
 
             // Light!
+            // Reuse the index buffer
             render_pass.set_pipeline(&self.light_render_pipeline);
-            //render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
+            //render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.set_vertex_buffer(0, self.light_vertex_buffer.slice(..));
             render_pass.set_bind_group(1, &self.light_texture_bind_group, &[]);
             render_pass.set_bind_group(2, &self.light_uniform_bind_group, &[]);
-            // TODO: light texture stuff
             let idx_val = std::cmp::min(self.num_indices, light_vertices.len() as u32);
             render_pass.draw_indexed(0..idx_val, 0, 0..1);
-
         }
 
 
-        // submit will accept anything that implements IntoIter
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
-
-        //Ok(())
     }
 }
