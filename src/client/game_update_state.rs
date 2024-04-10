@@ -1,12 +1,21 @@
 use crate::client::GameFrame;
 use crate::InputEvent;
 use std::path::Path;
+use std::collections::HashSet;
+use rand::Rng;
 
 pub struct GameUpdateState {
     world_w: usize,
     world_h: usize,
     fg_tiles: Vec<u8>,
     bg_tiles: Vec<u8>,
+    // TODO: abstract key presses into game events before this point
+    // this is debug code
+    just_pressed: HashSet<char>,
+    just_released: HashSet<char>,
+
+    trauma_percent: f32,
+    trauma_last_updated_ts: u64,
 }
 
 impl GameUpdateState {
@@ -57,16 +66,31 @@ impl GameUpdateState {
             world_h,
             fg_tiles,
             bg_tiles,
+            just_pressed: Default::default(),
+            just_released: Default::default(),
+            trauma_percent: 0.,
+            trauma_last_updated_ts: 0,
         }
     }
 
     pub fn prestep(&mut self, ts: u64, input_events: impl Iterator<Item = InputEvent>) -> bool {
+        self.just_pressed.clear();
+        self.just_released.clear();
         for e in input_events {
             match e {
                 InputEvent::KeyboardInput {
                     keycode,
                     press_state,
                 } => {
+                    match press_state {
+                        crate::PressState::Down => {
+                            self.just_pressed.insert(keycode);
+                        }
+                        crate::PressState::Up => {
+                            self.just_released.insert(keycode);
+                        }
+                        _ => ()
+                    }
                     println!("{keycode:?} {press_state:?}")
                 }
                 _ => {}
@@ -76,7 +100,19 @@ impl GameUpdateState {
         false
     }
 
-    pub fn step(&mut self, ts: u64, ft: u64) {}
+    pub fn step(&mut self, ts: u64, ft: u64) {
+        if self.just_pressed.contains(&'H') {
+            self.trauma_percent += 10.;
+            if self.trauma_percent > 100. {
+                self.trauma_percent = 100.;
+            }
+            self.trauma_last_updated_ts = ts;
+        }
+        if self.trauma_percent > 0. {
+            // TODO: adjust based on delta time later
+            self.trauma_percent -= 0.3;
+        }
+    }
 
     pub fn poststep(&mut self, ts: u64) -> GameFrame {
         let viewport_x = 32_usize;
@@ -156,6 +192,20 @@ impl GameUpdateState {
             (x1, y1, x2 - x1, y2 - y1, fg_tiles, bg_tiles)
         };
 
+        let ca_offsets = {
+            let mut ca_offsets = [[0., 0.], [0., 0.], [0., 0.]];
+            if self.trauma_percent > 0. {
+                let t = (ts - self.trauma_last_updated_ts) as f32 / 1_000_000.0;
+                let mut rng = rand::thread_rng();
+                let amt = self.trauma_percent as f32 / 100.0;
+                for i in [0, 2] {
+                    ca_offsets[i][0] = (rng.gen_range(-0.002..0.002) * amt) / t;
+                    ca_offsets[i][1] = (rng.gen_range(-0.002..0.002) * amt) / t;
+                }
+            }
+            ca_offsets
+        };
+
         GameFrame {
             viewport_x: 32.,
             viewport_y: 32.,
@@ -177,7 +227,7 @@ impl GameUpdateState {
             fg_tiles,
             bg_tiles,
 
-            ca_offsets: [[0., 0.], [0., 0.], [0., 0.]],
+            ca_offsets,
         }
     }
 }

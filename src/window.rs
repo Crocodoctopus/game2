@@ -52,14 +52,14 @@ impl Window {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum PressState {
     Up,
     Down,
     DownRepeat,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MouseButton {
     Left,
     Right,
