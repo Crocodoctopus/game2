@@ -71,6 +71,12 @@ struct TileUniform {
     mul_rgb: [f32; 3],
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct LightUniform {
+    texture_size: [u32; 2],
+}
+
 pub struct GameRenderStateWgpu {
     instance: wgpu::Instance,
     // pure unsafe hackery
@@ -99,6 +105,10 @@ pub struct GameRenderStateWgpu {
 
     tile_texture_bind_group: wgpu::BindGroup,
     
+    light_uniform: LightUniform,
+    light_uniform_buffer: wgpu::Buffer,
+    light_uniform_bind_group: wgpu::BindGroup,
+
     light_texture_bind_group: wgpu::BindGroup,
     light_texture: wgpu::Texture,
 }
@@ -492,12 +502,52 @@ impl GameRenderStateWgpu {
                 push_constant_ranges: &[],
         });
 
+        let light_uniform = LightUniform {
+            texture_size: [256, 256],
+        };
+
+        let light_uniform_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Light Uniform Buffer"),
+                contents: bytemuck::cast_slice(&[light_uniform]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+
+        let light_uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some("light_uniform_bind_group_layout"),
+        });
+
+        let light_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &light_uniform_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: light_uniform_buffer.as_entire_binding(),
+                }
+            ],
+            label: Some("light_uniform_bind_group"),
+        });
+
         let light_render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Light Render Pipeline Layout"),
                 bind_group_layouts: &[
                     &camera_bind_group_layout,
                     &light_texture_bind_group_layout,
+                    &light_uniform_bind_group_layout,
                 ],
                 push_constant_ranges: &[],
         });
@@ -559,13 +609,13 @@ impl GameRenderStateWgpu {
                     format: config.format,
                     blend: Some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Src,
-                            dst_factor: wgpu::BlendFactor::Dst,
+                            src_factor: wgpu::BlendFactor::Dst,
+                            dst_factor: wgpu::BlendFactor::Zero,
                             operation: wgpu::BlendOperation::Add,
                         },
                         alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Src,
-                            dst_factor: wgpu::BlendFactor::Dst,
+                            src_factor: wgpu::BlendFactor::Dst,
+                            dst_factor: wgpu::BlendFactor::Zero,
                             operation: wgpu::BlendOperation::Add,
                         },
                     }),
@@ -657,6 +707,9 @@ impl GameRenderStateWgpu {
             tile_uniform_buffer,
             tile_uniform_bind_group,
             tile_texture_bind_group,
+            light_uniform,
+            light_uniform_buffer,
+            light_uniform_bind_group,
             light_texture_bind_group,
             light_texture,
         }
@@ -814,6 +867,8 @@ impl GameRenderStateWgpu {
 
         // Render lighting.
         let mut light_vertices = vec![];
+        self.light_uniform.texture_size = [game_frame.light_w as u32, game_frame.light_h as u32];
+        self.queue.write_buffer(&self.light_uniform_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
         {
             // Set up.
             let mut rgba = vec![0u8; game_frame.light_w  * game_frame.light_h * 4];
@@ -986,6 +1041,7 @@ impl GameRenderStateWgpu {
             //render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
             render_pass.set_vertex_buffer(0, self.light_vertex_buffer.slice(..));
             render_pass.set_bind_group(1, &self.light_texture_bind_group, &[]);
+            render_pass.set_bind_group(2, &self.light_uniform_bind_group, &[]);
             // TODO: light texture stuff
             let idx_val = std::cmp::min(self.num_indices, light_vertices.len() as u32);
             render_pass.draw_indexed(0..idx_val, 0, 0..1);

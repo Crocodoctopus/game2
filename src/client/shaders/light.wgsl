@@ -28,7 +28,7 @@ fn vs_main(
     } else if in.vert_idx == 2 {
         out.light_uv = vec2(1.0, 1.0);
     } else {
-        out.light_uv = vec2(0.0, 0.0);
+        out.light_uv = vec2(0.0, 1.0);
     }
     out.clip_position = vec4<f32>(camera.view_matrix * vec3(in.light_xy, 1.0), 1.0);
     return out;
@@ -38,6 +38,9 @@ fn vs_main(
 var t_rgb_mask: texture_2d<u32>;
 @group(1) @binding(1)
 var s_rgb_mask: sampler;
+
+@group(2) @binding(0)
+var<uniform> light_texture_size: vec2<u32>;
 
 fn light_math(i: u32) -> f32 {
     if i == 0 {
@@ -51,7 +54,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var rgb = vec3<f32>(0);
     let size = vec2<f32>(textureDimensions(t_rgb_mask));
     //let sample = textureSample(t_rgb_mask, s_rgb_mask, in.light_uv);
-    let sample = textureLoad(t_rgb_mask, vec2<i32>(in.light_uv * size), 0);
+    let sample = textureLoad(t_rgb_mask, vec2<i32>(in.light_uv * (size / vec2<f32>(light_texture_size))), 0);
     rgb.r = light_math(sample.r);
     rgb.g = light_math(sample.g);
     rgb.b = light_math(sample.b);
