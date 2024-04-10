@@ -945,6 +945,13 @@ impl GameRenderStateWgpu {
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
 
+    fn update_effects(&mut self, game_frame: &GameFrame) {
+        self.ca_uniform.r_offset = game_frame.ca_offsets[0];
+        self.ca_uniform.g_offset = game_frame.ca_offsets[1];
+        self.ca_uniform.b_offset = game_frame.ca_offsets[2];
+        self.queue.write_buffer(&self.ca_uniform_buffer, 0, bytemuck::cast_slice(&[self.ca_uniform]));
+    }
+
     fn get_tile_vertices(&self, game_frame: &GameFrame) -> (Vec<TileVertex>, Vec<TileVertex>) {
         // Render tiles.
         let max_tiles = (game_frame.tiles_w - 2) * (game_frame.tiles_h - 2);
@@ -1160,6 +1167,7 @@ impl GameRenderStateWgpu {
 
     pub fn render(&mut self, _ts: u64, game_frame: GameFrame) {
         self.update_camera(&game_frame);
+        self.update_effects(&game_frame);
         let (fg_vertex_tiles, bg_vertex_tiles) = self.update_tiles(&game_frame);
         let light_vertices = self.update_lighting(&game_frame);
 

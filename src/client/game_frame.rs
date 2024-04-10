@@ -21,4 +21,8 @@ pub struct GameFrame {
     pub tiles_h: usize,
     pub fg_tiles: Box<[u8]>,
     pub bg_tiles: Box<[u8]>,
+
+    // Effect data.
+    // Chromatic Aberration
+    pub ca_offsets: [[f32; 2]; 3],
 }

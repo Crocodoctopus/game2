@@ -176,6 +176,8 @@ impl GameUpdateState {
             tiles_h,
             fg_tiles,
             bg_tiles,
+
+            ca_offsets: [[0., 0.], [0., 0.], [0., 0.]],
         }
     }
 }
