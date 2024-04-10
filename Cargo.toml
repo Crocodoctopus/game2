@@ -18,3 +18,4 @@ nalgebra-glm = "0.18.0"
 image = { version = "0.25.1", features = ["png"] }
 winit = "0.29.15"
 wgpu = "0.19.3"
+bytemuck = { version = "1.15.0", features = ["derive"] }
