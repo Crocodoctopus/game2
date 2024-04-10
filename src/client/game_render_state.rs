@@ -23,6 +23,36 @@ impl TileVertexInput {
         1 => Float32x2,
         2 => Float32x2
     ];
+
+    fn buffer_layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as _,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIB,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct LightVertexInput {
+    light_xy: [f32; 2],
+    light_uv: [f32; 2],
+}
+
+impl LightVertexInput {
+    const ATTRIB: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![
+        0 => Float32x2,
+        1 => Float32x2,
+    ];
+
+    fn buffer_layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as _,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIB,
+        }
+    }
 }
 
 pub struct GameRenderState<'a> {
@@ -30,7 +60,11 @@ pub struct GameRenderState<'a> {
     surface: wgpu::Surface<'a>,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    format: wgpu::TextureFormat,
+
+    // Textures.
+    tile_sprite_tex: (wgpu::Texture, wgpu::TextureView),
+    tile_mask_tex: (wgpu::Texture, wgpu::TextureView),
+    light_tex: (wgpu::Texture, wgpu::TextureView),
 
     // General purpose IBO.
     quad_ibo: wgpu::Buffer,
@@ -44,8 +78,9 @@ pub struct GameRenderState<'a> {
     tile_pipeline: wgpu::RenderPipeline,
     tile_bind_group: wgpu::BindGroup,
 
-    tile_sprite_tex: (wgpu::Texture, wgpu::TextureView),
-    tile_mask_tex: (wgpu::Texture, wgpu::TextureView),
+    // Light rendering.
+    light_pipeline: wgpu::RenderPipeline,
+    light_bind_group: wgpu::BindGroup,
 }
 
 impl<'a> GameRenderState<'a> {
@@ -81,7 +116,7 @@ impl<'a> GameRenderState<'a> {
             .unwrap();
 
             //
-            let format = wgpu::TextureFormat::Bgra8UnormSrgb;
+            let format = wgpu::TextureFormat::Bgra8Unorm;
             surface.configure(
                 &device,
                 &wgpu::SurfaceConfiguration {
@@ -119,7 +154,7 @@ impl<'a> GameRenderState<'a> {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 },
@@ -127,9 +162,8 @@ impl<'a> GameRenderState<'a> {
                 &pixels,
             );
 
-            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-            (texture, texture_view)
+            let view = texture.create_view(&<_>::default());
+            (texture, view)
         };
 
         let tile_mask_tex = {
@@ -137,10 +171,7 @@ impl<'a> GameRenderState<'a> {
             let texture =
                 image::load_from_memory(include_bytes!("../../resources/mask_sheet.png")).unwrap();
             let (width, height) = texture.dimensions();
-            assert_eq!(width, 64);
-            assert_eq!(height, 64);
             let pixels = texture.into_luma8();
-            assert_eq!(pixels.len(), 64 * 64);
 
             let texture = device.create_texture_with_data(
                 &queue,
@@ -162,9 +193,28 @@ impl<'a> GameRenderState<'a> {
                 &pixels,
             );
 
-            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let view = texture.create_view(&<_>::default());
+            (texture, view)
+        };
 
-            (texture, texture_view)
+        let light_tex = {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Light Texture"),
+                size: wgpu::Extent3d {
+                    width: 512,
+                    height: 512,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Uint,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+
+            let view = texture.create_view(&<_>::default());
+            (texture, view)
         };
 
         // Generic generic_sampler used for all textures.
@@ -257,7 +307,7 @@ impl<'a> GameRenderState<'a> {
                     entries: &[
                         wgpu::BindGroupLayoutEntry {
                             binding: 0,
-                            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
                             ty: wgpu::BindingType::Texture {
                                 multisampled: false,
                                 view_dimension: wgpu::TextureViewDimension::D2,
@@ -267,7 +317,7 @@ impl<'a> GameRenderState<'a> {
                         },
                         wgpu::BindGroupLayoutEntry {
                             binding: 1,
-                            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
                             ty: wgpu::BindingType::Texture {
                                 multisampled: false,
                                 view_dimension: wgpu::TextureViewDimension::D2,
@@ -311,11 +361,7 @@ impl<'a> GameRenderState<'a> {
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: "vs_main",
-                    buffers: &[wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<TileVertexInput>() as _,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &TileVertexInput::ATTRIB,
-                    }],
+                    buffers: &[TileVertexInput::buffer_layout()],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
@@ -347,11 +393,95 @@ impl<'a> GameRenderState<'a> {
             (pipeline, bind_group)
         };
 
+        let (light_pipeline, light_bind_group) = {
+            // Shader.
+            let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/light.wgsl"));
+
+            // Bind group.
+            let bind_group = {
+                let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("Light Bind Group Layout"),
+                    entries: &[wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Uint,
+                        },
+                        count: None,
+                    }],
+                });
+
+                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Light Bind Group"),
+                    layout: &layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&light_tex.1),
+                    }],
+                });
+
+                (group, layout)
+            };
+
+            // Pipeline layout.
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Light Pipeline Layout"),
+                bind_group_layouts: &[&misc_bind_group.1, &bind_group.1],
+                push_constant_ranges: &[],
+            });
+
+            // Render pipeline.
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Light Pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: &[LightVertexInput::buffer_layout()],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::Dst,
+                                dst_factor: wgpu::BlendFactor::Zero,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                            alpha: wgpu::BlendComponent::default(),
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    strip_index_format: Some(wgpu::IndexFormat::Uint16),
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+            });
+
+            (pipeline, bind_group)
+        };
+
         Self {
             surface,
             device,
             queue,
-            format,
 
             quad_ibo,
 
@@ -361,9 +491,13 @@ impl<'a> GameRenderState<'a> {
 
             tile_sprite_tex,
             tile_mask_tex,
+            light_tex,
 
             tile_pipeline,
             tile_bind_group: tile_bind_group.0,
+
+            light_pipeline,
+            light_bind_group: light_bind_group.0,
         }
     }
 
@@ -473,9 +607,44 @@ impl<'a> GameRenderState<'a> {
             };
         }
 
+        // Calculate light data.
+        let rgba: Vec<u8> = (0..game_frame.light_w * game_frame.light_h)
+            .into_iter()
+            .flat_map(|i| {
+                [
+                    game_frame.r_channel[i],
+                    game_frame.g_channel[i],
+                    game_frame.b_channel[i],
+                    255,
+                ]
+            })
+            .collect();
+        let light_x = game_frame.light_x as f32;
+        let light_y = game_frame.light_y as f32;
+        let light_w = game_frame.light_w as f32;
+        let light_h = game_frame.light_h as f32;
+        let mut light_vertices = [
+            LightVertexInput {
+                light_xy: [light_x * 16., light_y * 16.],
+                light_uv: [0., 0.],
+            },
+            LightVertexInput {
+                light_xy: [(light_x + light_w) * 16., light_y * 16.],
+                light_uv: [light_w, 0.],
+            },
+            LightVertexInput {
+                light_xy: [(light_x + light_w) * 16., (light_y + light_h) * 16.],
+                light_uv: [light_w, light_h],
+            },
+            LightVertexInput {
+                light_xy: [light_x * 16., (light_y + light_h) * 16.],
+                light_uv: [0., light_h],
+            },
+        ];
+
         // Begin rendering.
         {
-            // Upload camera.
+            // Upload view uniform.
             {
                 self.queue.write_buffer(
                     &self.view_uniform,
@@ -484,7 +653,37 @@ impl<'a> GameRenderState<'a> {
                 );
             }
 
-            // Input buffer.
+            // Upload light vbo data.
+            let light_vertex_input =
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Light Vertex Input Buffer"),
+                        contents: bytemuck::cast_slice(&light_vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+
+            // Upload light texture.
+            self.queue.write_texture(
+                wgpu::ImageCopyTextureBase {
+                    texture: &self.light_tex.0,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &rgba,
+                wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * game_frame.light_w as u32),
+                    rows_per_image: Some(game_frame.light_h as u32),
+                },
+                wgpu::Extent3d {
+                    width: game_frame.light_w as u32,
+                    height: game_frame.light_h as u32,
+                    depth_or_array_layers: 1,
+                },
+            );
+
+            // Upload tile vbo data.
             let fg_vertex_input =
                 self.device
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -528,14 +727,28 @@ impl<'a> GameRenderState<'a> {
                 timestamp_writes: None,
             });
 
+            // Generic IBO and misc group.
             render_pass.set_index_buffer(self.quad_ibo.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.set_bind_group(0, &self.misc_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.tile_bind_group, &[]);
 
-            // FG Tile Rendering.
-            render_pass.set_pipeline(&self.tile_pipeline);
-            render_pass.set_vertex_buffer(0, fg_vertex_input.slice(..));
-            render_pass.draw_indexed(0..fg_vertex_tiles.len() as u32 / 4 * 5, 0, 0..1);
+            // Tile rendering.
+            {
+                // Pipeline and tile bind group are shared.
+                render_pass.set_pipeline(&self.tile_pipeline);
+                render_pass.set_bind_group(1, &self.tile_bind_group, &[]);
+
+                // FG Tile Rendering.
+                render_pass.set_vertex_buffer(0, fg_vertex_input.slice(..));
+                render_pass.draw_indexed(0..fg_vertex_tiles.len() as u32 / 4 * 5, 0, 0..1);
+            }
+
+            // Light rendering.
+            {
+                render_pass.set_pipeline(&self.light_pipeline);
+                render_pass.set_bind_group(1, &self.light_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, light_vertex_input.slice(..));
+                render_pass.draw_indexed(0..4, 0, 0..1);
+            }
 
             drop(render_pass);
             self.queue.submit(std::iter::once(encoder.finish()));

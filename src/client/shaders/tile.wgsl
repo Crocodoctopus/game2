@@ -34,11 +34,7 @@ struct FragmentInput {
 
 @fragment
 fn fs_main(in: FragmentInput) -> @location(0) vec4<f32> {
-    // Get texture properties (should this be a uniform?).
-    //let sprite_tex_size: vec2<f32> = vec2<f32>(textureDimensions(sprite_tex));
-    //let mask_tex_size: vec2<f32> = vec2<f32>(textureDimensions(mask_tex));
-
-    // Early discard if mask coevers texture.
+    // Early discard if mask covers texture.
     let mask: u32 = textureLoad(mask_tex, vec2<u32>(in.mask_uv), 0)[0];
     if (mask == 0) {
         discard;
