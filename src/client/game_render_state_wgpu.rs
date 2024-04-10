@@ -50,16 +50,137 @@ struct CameraUniform {
     view_matrix: [[f32; 4]; 4],
 }
 
+impl CameraUniform {
+    fn uniform_desc(&self, device: &wgpu::Device) -> (wgpu::Buffer, wgpu::BindGroupLayout, wgpu::BindGroup) {
+        let camera_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Camera Buffer"),
+                contents: bytemuck::cast_slice(&[self.clone()]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+
+        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some("camera_bind_group_layout"),
+        });
+
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &camera_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                }
+            ],
+            label: Some("camera_bind_group"),
+        });
+        (camera_buffer, camera_bind_group_layout, camera_bind_group)
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct TileUniform {
     mul_rgb: [f32; 3],
 }
 
+impl TileUniform {
+    fn uniform_desc(&self, device: &wgpu::Device) -> (wgpu::Buffer, wgpu::BindGroupLayout, wgpu::BindGroup) {
+        let tile_uniform_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Tile Uniform Buffer"),
+                contents: bytemuck::cast_slice(&[self.clone()]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+
+        let tile_uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some("tile_uniform_bind_group_layout"),
+        });
+
+        let tile_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &tile_uniform_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: tile_uniform_buffer.as_entire_binding(),
+                }
+            ],
+            label: Some("tile_uniform_bind_group"),
+        });
+
+        (tile_uniform_buffer, tile_uniform_bind_group_layout, tile_uniform_bind_group)
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct LightUniform {
     texture_size: [u32; 2],
+}
+
+impl LightUniform {
+    fn uniform_desc(&self, device: &wgpu::Device) -> (wgpu::Buffer, wgpu::BindGroupLayout, wgpu::BindGroup) {
+        let light_uniform_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Light Uniform Buffer"),
+                contents: bytemuck::cast_slice(&[self.clone()]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+
+        let light_uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some("light_uniform_bind_group_layout"),
+        });
+
+        let light_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &light_uniform_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: light_uniform_buffer.as_entire_binding(),
+                }
+            ],
+            label: Some("light_uniform_bind_group"),
+        });
+        (light_uniform_buffer, light_uniform_bind_group_layout, light_uniform_bind_group)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -368,80 +489,12 @@ impl GameRenderStateWgpu {
         let camera_uniform = CameraUniform {
             view_matrix: Mat4::identity().into(),
         };
-
-        let camera_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Camera Buffer"),
-                contents: bytemuck::cast_slice(&[camera_uniform]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }
-        );
-
-        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }
-            ],
-            label: Some("camera_bind_group_layout"),
-        });
-
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &camera_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                }
-            ],
-            label: Some("camera_bind_group"),
-        });
+        let (camera_buffer, camera_bind_group_layout, camera_bind_group) = camera_uniform.uniform_desc(&device);
 
         let tile_uniform = TileUniform {
             mul_rgb: [1.0, 1.0, 1.0],
         };
-
-        let tile_uniform_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Tile Uniform Buffer"),
-                contents: bytemuck::cast_slice(&[tile_uniform]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }
-        );
-
-        let tile_uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }
-            ],
-            label: Some("tile_uniform_bind_group_layout"),
-        });
-
-        let tile_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &tile_uniform_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: tile_uniform_buffer.as_entire_binding(),
-                }
-            ],
-            label: Some("tile_uniform_bind_group"),
-        });
+        let (tile_uniform_buffer, tile_uniform_bind_group_layout, tile_uniform_bind_group) = tile_uniform.uniform_desc(&device);
 
         let tile_render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -450,56 +503,6 @@ impl GameRenderStateWgpu {
                     &camera_bind_group_layout,
                     &texture_bind_group_layout,
                     &tile_uniform_bind_group_layout,
-                ],
-                push_constant_ranges: &[],
-        });
-
-        let light_uniform = LightUniform {
-            texture_size: [256, 256],
-        };
-
-        let light_uniform_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Light Uniform Buffer"),
-                contents: bytemuck::cast_slice(&[light_uniform]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }
-        );
-
-        let light_uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }
-            ],
-            label: Some("light_uniform_bind_group_layout"),
-        });
-
-        let light_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &light_uniform_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: light_uniform_buffer.as_entire_binding(),
-                }
-            ],
-            label: Some("light_uniform_bind_group"),
-        });
-
-        let light_render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Light Render Pipeline Layout"),
-                bind_group_layouts: &[
-                    &camera_bind_group_layout,
-                    &light_texture_bind_group_layout,
-                    &light_uniform_bind_group_layout,
                 ],
                 push_constant_ranges: &[],
         });
@@ -542,6 +545,22 @@ impl GameRenderStateWgpu {
                 alpha_to_coverage_enabled: false,
             },
             multiview: None,
+        });
+
+        let light_uniform = LightUniform {
+            texture_size: [256, 256],
+        };
+        let (light_uniform_buffer, light_uniform_bind_group_layout, light_uniform_bind_group) = light_uniform.uniform_desc(&device);
+
+        let light_render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Light Render Pipeline Layout"),
+                bind_group_layouts: &[
+                    &camera_bind_group_layout,
+                    &light_texture_bind_group_layout,
+                    &light_uniform_bind_group_layout,
+                ],
+                push_constant_ranges: &[],
         });
 
         let light_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -596,15 +615,6 @@ impl GameRenderStateWgpu {
         });
 
         let vertex_data: Vec<TileVertex> = vec![];
-        let light_vertex_data: Vec<LightVertex> = vec![];
-
-        #[rustfmt::skip]
-        let ibo_data: Vec<u16> = (0..13107)
-            .into_iter()
-            .flat_map(|i| [i * 4 + 0, i * 4 + 3, i * 4 + 1, i * 4 + 2, u16::MAX])
-            .collect();
-        assert_eq!(ibo_data.len(), 65535);
-
         let fg_vertex_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("FG Vertex Buffer"),
@@ -619,6 +629,8 @@ impl GameRenderStateWgpu {
                 usage: wgpu::BufferUsages::VERTEX,
             }
         );
+
+        let light_vertex_data: Vec<LightVertex> = vec![];
         let light_vertex_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Light Vertex Buffer"),
@@ -627,6 +639,12 @@ impl GameRenderStateWgpu {
             }
         );
 
+        #[rustfmt::skip]
+        let ibo_data: Vec<u16> = (0..13107)
+            .into_iter()
+            .flat_map(|i| [i * 4 + 0, i * 4 + 3, i * 4 + 1, i * 4 + 2, u16::MAX])
+            .collect();
+        assert_eq!(ibo_data.len(), 65535);
         let index_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Index Buffer"),
