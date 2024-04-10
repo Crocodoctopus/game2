@@ -4,6 +4,8 @@ use std::path::Path;
 use std::collections::HashSet;
 use rand::Rng;
 
+use super::game_frame;
+
 pub struct GameUpdateState {
     world_w: usize,
     world_h: usize,
@@ -16,6 +18,9 @@ pub struct GameUpdateState {
 
     trauma_percent: f32,
     trauma_last_updated_ts: u64,
+
+    camera_pos: (f32, f32),
+    camera_update_dir: (f32, f32),
 }
 
 impl GameUpdateState {
@@ -61,6 +66,8 @@ impl GameUpdateState {
             }
         }
 
+        fg_tiles = crate::shared::terrain_gen::generate_terrain(world_w, world_h, 0);
+
         Self {
             world_w,
             world_h,
@@ -70,6 +77,8 @@ impl GameUpdateState {
             just_released: Default::default(),
             trauma_percent: 0.,
             trauma_last_updated_ts: 0,
+            camera_pos: (32., 32.),
+            camera_update_dir: (0., 0.),
         }
     }
 
@@ -112,6 +121,42 @@ impl GameUpdateState {
             // TODO: adjust based on delta time later
             self.trauma_percent -= 0.3;
         }
+
+        if self.just_pressed.contains(&'G') {
+            let seed: u32 = rand::thread_rng().gen();
+            self.fg_tiles = crate::shared::terrain_gen::generate_terrain(self.world_w, self.world_h, seed);
+        }
+
+        if self.just_pressed.contains(&'W') {
+            self.camera_update_dir.1 = -1.;
+        }
+        if self.just_pressed.contains(&'S') {
+            self.camera_update_dir.1 = 1.;
+        }
+        if self.just_pressed.contains(&'A') {
+            self.camera_update_dir.0 = -1.;
+        }
+        if self.just_pressed.contains(&'D') {
+            self.camera_update_dir.0 = 1.;
+        }
+        if self.just_released.contains(&'W') {
+            self.camera_update_dir.1 = 0.;
+        }
+        if self.just_released.contains(&'S') {
+            self.camera_update_dir.1 = 0.;
+        }
+        if self.just_released.contains(&'A') {
+            self.camera_update_dir.0 = 0.;
+        }
+        if self.just_released.contains(&'D') {
+            self.camera_update_dir.0 = 0.;
+        }
+
+        const CAMERA_SPEED: f32 = 100.;
+
+        self.camera_pos.0 += self.camera_update_dir.0 * CAMERA_SPEED * (ft as f32 / 1_000_000.);
+        self.camera_pos.1 += self.camera_update_dir.1 * CAMERA_SPEED * (ft as f32 / 1_000_000.);
+
     }
 
     pub fn poststep(&mut self, ts: u64) -> GameFrame {
@@ -207,8 +252,8 @@ impl GameUpdateState {
         };
 
         GameFrame {
-            viewport_x: 32.,
-            viewport_y: 32.,
+            viewport_x: self.camera_pos.0,
+            viewport_y: self.camera_pos.1,
             viewport_w: 1920.,
             viewport_h: 1080.,
 

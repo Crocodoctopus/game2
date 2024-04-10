@@ -22,6 +22,7 @@ bytemuck = { version = "1.12", features = [ "derive" ] }
 image = "0.25"
 anyhow = "1.0"
 rand = "0.8"
+noise = "0.9"
 
 [features]
 opengl = []
