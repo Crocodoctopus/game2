@@ -1025,7 +1025,8 @@ impl GameRenderStateWgpu {
             self.queue.write_buffer(&self.tile_uniform_buffer, 0, bytemuck::cast_slice(&[self.tile_uniform]));
             render_pass.set_vertex_buffer(0, self.bg_vertex_buffer.slice(..));
 
-            let idx_val = std::cmp::min(self.num_indices, bg_vertex_tiles.len() as u32);
+            let num_bg_tiles = (bg_vertex_tiles.len() / 4) * 5;
+            let idx_val = std::cmp::min(self.num_indices, num_bg_tiles as u32);
             render_pass.draw_indexed(0..idx_val, 0, 0..1);
 
             // foreground tiles
@@ -1033,7 +1034,8 @@ impl GameRenderStateWgpu {
             self.queue.write_buffer(&self.tile_uniform_buffer, 0, bytemuck::cast_slice(&[self.tile_uniform]));
             render_pass.set_vertex_buffer(0, self.fg_vertex_buffer.slice(..));
 
-            let idx_val = std::cmp::min(self.num_indices, fg_vertex_tiles.len() as u32);
+            let num_fg_tiles = (fg_vertex_tiles.len() / 4) * 5;
+            let idx_val = std::cmp::min(self.num_indices, num_fg_tiles as u32);
             render_pass.draw_indexed(0..idx_val, 0, 0..1);
 
             // Light!

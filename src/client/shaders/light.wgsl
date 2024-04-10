@@ -54,7 +54,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var rgb = vec3<f32>(0);
     let size = vec2<f32>(textureDimensions(t_rgb_mask));
     //let sample = textureSample(t_rgb_mask, s_rgb_mask, in.light_uv);
-    let sample = textureLoad(t_rgb_mask, vec2<i32>(in.light_uv * (size / vec2<f32>(light_texture_size))), 0);
+    let sample = textureLoad(t_rgb_mask, vec2<i32>(in.light_uv * vec2<f32>(light_texture_size)), 0);
     rgb.r = light_math(sample.r);
     rgb.g = light_math(sample.g);
     rgb.b = light_math(sample.b);
