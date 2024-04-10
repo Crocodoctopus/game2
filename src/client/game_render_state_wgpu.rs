@@ -27,6 +27,28 @@ impl TileVertex {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+/// Generic Vertex guaranteed to not have extra info.
+/// If you want extra info, make a new type.
+/// If you need extra info, use another type.
+struct Vertex {
+    pos: [f32; 2],
+}
+
+impl Vertex {
+    const VAO: &'static [wgpu::VertexAttribute] = 
+        &wgpu::vertex_attr_array![0 => Float32x2];
+
+    const fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: Self::VAO,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct LightVertex {
     light_xy: [f32; 2],
 }
@@ -183,6 +205,54 @@ impl LightUniform {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct ChromaticAberrationUniform {
+    r_offset: [f32; 2],
+    g_offset: [f32; 2],
+    b_offset: [f32; 2],
+}
+
+impl ChromaticAberrationUniform {
+    fn uniform_desc(&self, device: &wgpu::Device) -> (wgpu::Buffer, wgpu::BindGroupLayout, wgpu::BindGroup) {
+        let ca_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Chromatic Aberration Buffer"),
+                contents: bytemuck::cast_slice(&[self.clone()]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+
+        let ca_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some("chromatic_aberration_bind_group_layout"),
+        });
+
+        let ca_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &ca_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ca_buffer.as_entire_binding(),
+                },
+            ],
+            label: Some("ca_bind_group"),
+        });
+        (ca_buffer, ca_bind_group_layout, ca_bind_group)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TextureType {
     Rgba8,
@@ -271,6 +341,28 @@ fn create_empty_texture(device: &wgpu::Device, (width, height): (u32, u32), tt: 
     Ok(texture)
 }
 
+fn create_empty_renderedable_texture(device: &wgpu::Device, (width, height): (u32, u32), format: wgpu::TextureFormat, label: Option<&'static str>) -> anyhow::Result<wgpu::Texture> {
+    let texture_size = wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(
+        &wgpu::TextureDescriptor {
+            size: texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            // TODO: review
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            label,
+            view_formats: &[],
+        }
+    );
+    Ok(texture)
+}
+
 pub struct GameRenderStateWgpu {
     instance: wgpu::Instance,
     // pure unsafe hackery
@@ -282,6 +374,7 @@ pub struct GameRenderStateWgpu {
 
     tile_render_pipeline: wgpu::RenderPipeline,
     light_render_pipeline: wgpu::RenderPipeline,
+    post_processing_pipeline: wgpu::RenderPipeline,
 
     fg_vertex_buffer: wgpu::Buffer,
     bg_vertex_buffer: wgpu::Buffer,
@@ -305,6 +398,17 @@ pub struct GameRenderStateWgpu {
 
     light_texture_bind_group: wgpu::BindGroup,
     light_texture: wgpu::Texture,
+
+    rendered_texture_bind_group: wgpu::BindGroup,
+    rendered_texture: wgpu::Texture,
+    rendered_texture_view: wgpu::TextureView,
+
+    // Chromatic Aberration
+    ca_uniform: ChromaticAberrationUniform,
+    ca_uniform_buffer: wgpu::Buffer,
+    ca_uniform_bind_group: wgpu::BindGroup,
+
+    screen_quad_vertex_buffer: wgpu::Buffer,
 }
 
 impl GameRenderStateWgpu {
@@ -340,7 +444,7 @@ impl GameRenderStateWgpu {
         let (device, queue) = adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::empty(),
+                required_features:wgpu::Features::BGRA8UNORM_STORAGE, //wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
             },
             None,
@@ -352,7 +456,7 @@ impl GameRenderStateWgpu {
         // sRGB surfaces, you'll need to account for that when drawing to the frame.
         let surface_format = surface_caps.formats.iter()
             .copied()
-            //.filter(|f| f.describe().srgb)
+            .filter(|f| f.is_srgb())
             .next()
             .unwrap_or(surface_caps.formats[0]);
 
@@ -371,10 +475,15 @@ impl GameRenderStateWgpu {
         let tile_sheet = create_texture(&device, &queue, include_bytes!("../../resources/tile_sheet.png"), TextureType::Rgba8, Some("tile_sheet"))?;
         let mask_sheet = create_texture(&device, &queue, include_bytes!("../../resources/mask_sheet.png"), TextureType::Gray, Some("mask_sheet"))?;
         let light_texture = create_empty_texture(&device, (256, 256), TextureType::Rgba8Uint, Some("light_texture"))?;
+        let rendered_texture = create_empty_renderedable_texture(&device, (size.0 as u32, size.1 as u32), surface_format, Some("rendered_texture"))?;
 
         let tile_sheet_texture_view = tile_sheet.create_view(&wgpu::TextureViewDescriptor::default());
         let mask_sheet_texture_view = mask_sheet.create_view(&wgpu::TextureViewDescriptor::default());
         let light_texture_view = light_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let rendered_texture_view = rendered_texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(surface_format),
+            ..Default::default()
+        });
         let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
@@ -482,9 +591,50 @@ impl GameRenderStateWgpu {
                     label: Some("light_texture_bind_group"),
                 }
             );
+
+        let rendered_texture_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+                label: Some("rendered_texture_bind_group_layout"),
+            });
+
+        let rendered_texture_bind_group = device.create_bind_group(
+                &wgpu::BindGroupDescriptor {
+                    layout: &rendered_texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&rendered_texture_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&texture_sampler),
+                        }
+                    ],
+                    label: Some("rendered_texture_bind_group"),
+                }
+            );
             
         let tile_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/tile.wgsl"));
         let light_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/light.wgsl"));
+        let post_processing_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/chromatic_aberration.wgsl"));
 
         let camera_uniform = CameraUniform {
             view_matrix: Mat4::identity().into(),
@@ -614,6 +764,63 @@ impl GameRenderStateWgpu {
             multiview: None,
         });
 
+        let ca_uniform = ChromaticAberrationUniform {
+            r_offset: [-0.006, 0.0],
+            g_offset: [0.0, 0.0],
+            b_offset: [0.006, 0.0],
+        };
+        let (ca_uniform_buffer, ca_uniform_bind_group_layout, ca_uniform_bind_group) = ca_uniform.uniform_desc(&device);
+
+        let post_processing_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Post Processing Pipeline Layout"),
+                bind_group_layouts: &[
+                    &rendered_texture_bind_group_layout,
+                    &ca_uniform_bind_group_layout,
+                ],
+                push_constant_ranges: &[],
+        });
+
+        let post_processing_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Post Process Render Pipeline"),
+            layout: Some(&post_processing_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &post_processing_shader,
+                entry_point: "vs_main",
+                buffers: &[
+                    Vertex::desc(),
+                ],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &post_processing_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: Some(wgpu::IndexFormat::Uint16),
+                front_face: wgpu::FrontFace::Cw,
+                cull_mode: None,//Some(wgpu::Face::Back),
+                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                polygon_mode: wgpu::PolygonMode::Fill,
+                // Requires Features::DEPTH_CLIP_CONTROL
+                unclipped_depth: false,
+                // Requires Features::CONSERVATIVE_RASTERIZATION
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+        });
+
         let vertex_data: Vec<TileVertex> = vec![];
         let fg_vertex_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
@@ -639,6 +846,15 @@ impl GameRenderStateWgpu {
             }
         );
 
+        let screen_quad_vertex_data: Vec<Vertex> = vec![(Vertex { pos: [-1.0, -1.0] }), (Vertex { pos: [-1.0, 1.0] }), (Vertex { pos: [1.0, 1.0] }), (Vertex { pos: [1.0, -1.0] })];
+        let screen_quad_vertex_buffer  = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Screen Quad Vertex Buffer"),
+                contents: bytemuck::cast_slice(&screen_quad_vertex_data),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+
         #[rustfmt::skip]
         let ibo_data: Vec<u16> = (0..13107)
             .into_iter()
@@ -654,7 +870,6 @@ impl GameRenderStateWgpu {
         );
         let num_indices = ibo_data.len() as u32;
 
-
         Ok(
             Self {
                 instance,
@@ -665,6 +880,7 @@ impl GameRenderStateWgpu {
                 size,
                 tile_render_pipeline,
                 light_render_pipeline,
+                post_processing_pipeline,
                 fg_vertex_buffer,
                 bg_vertex_buffer,
                 light_vertex_buffer,
@@ -682,6 +898,15 @@ impl GameRenderStateWgpu {
                 light_uniform_bind_group,
                 light_texture_bind_group,
                 light_texture,
+
+                ca_uniform,
+                ca_uniform_bind_group,
+                ca_uniform_buffer,
+
+                rendered_texture_bind_group,
+                rendered_texture,
+                rendered_texture_view,
+                screen_quad_vertex_buffer,
             }
         )
     }
@@ -940,16 +1165,18 @@ impl GameRenderStateWgpu {
 
         let output = self.surface.get_current_texture().unwrap();//?;
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
+        //let rendered_texture_view = self.rendered_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 // This is what @location(0) in the fragment shader targets
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &self.rendered_texture_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -966,7 +1193,6 @@ impl GameRenderStateWgpu {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
-
 
             // background tiles
             render_pass.set_pipeline(&self.tile_render_pipeline);
@@ -1006,6 +1232,32 @@ impl GameRenderStateWgpu {
             render_pass.set_bind_group(2, &self.light_uniform_bind_group, &[]);
             let idx_val = std::cmp::min(self.num_indices, light_vertices.len() as u32);
             render_pass.draw_indexed(0..idx_val, 0, 0..1);
+
+            drop(render_pass);
+
+            let mut post_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Post Render Pass"),
+                // This is what @location(0) in the fragment shader targets
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: Default::default(),
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+
+            // Post-processing!
+            post_render_pass.set_pipeline(&self.post_processing_pipeline);
+            post_render_pass.set_index_buffer(self.index_buffer.slice(0..12), wgpu::IndexFormat::Uint16);
+            post_render_pass.set_vertex_buffer(0, self.screen_quad_vertex_buffer.slice(..));
+            post_render_pass.set_bind_group(0, &self.rendered_texture_bind_group, &[]);
+            post_render_pass.set_bind_group(1, &self.ca_uniform_bind_group, &[]);
+            post_render_pass.draw_indexed(0..4, 0, 0..1);
         }
 
 
