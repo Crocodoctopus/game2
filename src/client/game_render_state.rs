@@ -130,14 +130,14 @@ impl<'a> GameRenderState<'a> {
             let surface_config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format: wgpu::TextureFormat::Bgra8Unorm,
-                width: 0,
-                height: 0,
+                width: 1280,
+                height: 720,
                 present_mode: wgpu::PresentMode::Fifo,
                 desired_maximum_frame_latency: 1,
                 alpha_mode: wgpu::CompositeAlphaMode::Auto,
                 view_formats: vec![],
             };
-            //surface.configure(&device, &surface_config);
+            surface.configure(&device, &surface_config);
 
             (surface, device, queue, surface_config)
         };
