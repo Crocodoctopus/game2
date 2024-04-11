@@ -576,7 +576,7 @@ impl<'a> GameRenderState<'a> {
             _ => return,
         };
 
-        // Whisked away to a far oof place.
+        // Whisked away to a far off place.
         self.process_view_matrix(&game_frame);
         let light_vertex_input = self.process_light_state(&game_frame);
         let (fg_vertex_input, fg_count, bg_vertex_input, bg_count) =
