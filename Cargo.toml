@@ -19,7 +19,7 @@ once_cell = "1.19.0"
 wgpu = { version = "0.19", optional = true }
 pollster = { version = "0.3", optional = true }
 bytemuck = { version = "1.12", features = [ "derive" ] }
-image = "0.25"
+image = { version = "0.25", deafault-features=false, features = ["rayon", "png"] }
 anyhow = "1.0"
 rand = "0.8"
 noise = "0.9"
