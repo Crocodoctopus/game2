@@ -128,6 +128,7 @@ impl GameUpdateState {
                     match keycode {
                         'd' => self.right_queue = self.right_queue & !1 | bit,
                         'a' => self.left_queue = self.left_queue & !1 | bit,
+                        ' ' => self.jump_queue = self.jump_queue & !1 | bit,
                         '1' if bit == 0 => {
                             let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
                             self.fg_tiles[index] = Tile::RedTorch;
