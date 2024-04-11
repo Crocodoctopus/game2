@@ -27,7 +27,12 @@ fn update_humanoid_physics_x(humanoid: &mut Humanoid, ft: f32) {
     humanoid.dx += humanoid.ddx * ft;
 }
 
-fn resolve_humanoid_tile_collision_x(humanoid: &mut Humanoid, last_x: f32, stride: usize, tiles: Box<[Tile]>) {
+fn resolve_humanoid_tile_collision_x(
+    humanoid: &mut Humanoid,
+    last_x: f32,
+    stride: usize,
+    tiles: Box<[Tile]>,
+) {
     // Calculate (x1..x2) based on distance moved.
     let (x1, x2) = if humanoid.x > last_x {
         let x1 = ((last_x + humanoid.w) / TILE_SIZE as f32).ceil() as usize;

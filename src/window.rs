@@ -1,78 +1,106 @@
-use crate::gl;
-use glfw::*;
-
 pub struct Window {
-    window: PWindow,
-    events: GlfwReceiver<(f64, WindowEvent)>,
+    pub window: winit::window::Window,
 }
 
 impl Window {
-    pub fn new(glfw: &mut Glfw, w: u32, h: u32) -> Self {
-        glfw.window_hint(WindowHint::Resizable(false));
-        let (mut window, events) = glfw
-            .create_window(w, h, "Rarr", WindowMode::Windowed)
-            .unwrap();
-        window.set_key_polling(true);
-        window.set_mouse_button_polling(true);
-        window.set_cursor_pos_polling(true);
-        window.make_current();
-
-        Self { window, events }
+    pub fn new(window: winit::window::Window) -> Self {
+        Self { window }
     }
 
-    pub fn gl_load(&mut self) {
-        gl::load_with(|s| self.window.get_proc_address(s) as *const _);
+    pub fn swap(&self) {
+        self.window.request_redraw();
     }
+}
 
-    pub fn swap(&mut self) {
-        self.window.swap_buffers();
+pub struct EventLoop {
+    pub event_loop: winit::event_loop::EventLoop<()>,
+}
+
+impl EventLoop {
+    pub fn new(event_loop: winit::event_loop::EventLoop<()>) -> Self {
+        Self { event_loop }
     }
 
     pub fn poll(&mut self) -> Vec<InputEvent> {
-        let (w_w, w_h) = self.window.get_size();
-        let (w_w, w_h) = (w_w as f64, w_h as f64);
-        glfw::flush_messages(&self.events)
-            .map(|(_, e)| match e {
-                glfw::WindowEvent::CursorPos(x, y) => InputEvent::MouseMove {
-                    x: (x / w_w) as f32,
-                    y: (y / w_h) as f32,
-                },
-                glfw::WindowEvent::MouseButton(button, action, _) => {
-                    let mouse_button = match button {
-                        glfw::MouseButtonLeft => MouseButton::Left,
-                        glfw::MouseButtonMiddle => MouseButton::Middle,
-                        glfw::MouseButtonRight => MouseButton::Right,
-                        glfw::MouseButton::Button4 => MouseButton::Button(4),
-                        glfw::MouseButton::Button5 => MouseButton::Button(5),
-                        glfw::MouseButton::Button6 => MouseButton::Button(6),
-                        glfw::MouseButton::Button7 => MouseButton::Button(7),
-                        glfw::MouseButton::Button8 => MouseButton::Button(8),
-                    };
-                    let press_state = match action {
-                        Action::Release => PressState::Up,
-                        Action::Press => PressState::Down,
-                        _ => unreachable!(),
-                    };
-                    InputEvent::MouseClick {
-                        mouse_button,
-                        press_state,
+        let mut input_events = Vec::new();
+        use winit::platform::pump_events::EventLoopExtPumpEvents;
+        #[rustfmt::skip]
+        let status = self
+            .event_loop
+            .pump_events(Some(std::time::Duration::ZERO), |event, _| {
+                match event {
+                    winit::event::Event::WindowEvent { window_id: _, event } => {
+                        match event {
+                            // Keyboard input event.
+                            winit::event::WindowEvent::KeyboardInput { device_id: _, event, is_synthetic: _ } => {
+                                use winit::platform::scancode::PhysicalKeyExtScancode;
+                                let keycode = match &event.logical_key {
+                                    winit::keyboard::Key::Character(c) => c.as_str().chars().next().unwrap(),
+                                    _ => return,
+                                };
+
+                                let press_state = match event.state {
+                                    winit::event::ElementState::Pressed => PressState::Down,
+                                    winit::event::ElementState::Released => PressState::Up,
+                                };
+
+                                input_events.push(InputEvent::KeyboardInput {
+                                    keycode,
+                                    press_state,
+                                });
+                            }
+
+                            // Window close event.
+                            winit::event::WindowEvent::CloseRequested => {
+                                input_events.push(InputEvent::WindowClose);
+                            }
+
+                            // Window resize event.
+                            winit::event::WindowEvent::Resized(size) => {
+                                input_events.push(InputEvent::WindowResize {
+                                    width: size.width as u16,
+                                    height: size.height as u16,
+                                });
+                            }
+
+                            // Mouse move event.
+                            winit::event::WindowEvent::CursorMoved { device_id: _, position } => {
+                                input_events.push(InputEvent::MouseMove {
+                                    x: position.x as f32,
+                                    y: position.y as f32,
+                                });
+                            }
+
+                            // Mouse click event.
+                            winit::event::WindowEvent::MouseInput { device_id: _, state, button } => {
+                                let mouse_button = match button {
+                                    winit::event::MouseButton::Left => MouseButton::Left,
+                                    winit::event::MouseButton::Right => MouseButton::Right,
+                                    winit::event::MouseButton::Middle => MouseButton::Middle,
+                                    winit::event::MouseButton::Other(i) => MouseButton::Button(i as u8),
+                                    _ => return,
+                                };
+
+                                let press_state = match state {
+                                    winit::event::ElementState::Pressed => PressState::Down,
+                                    winit::event::ElementState::Released => PressState::Up,
+                                };
+
+                                input_events.push(InputEvent::MouseClick {
+                                    mouse_button,
+                                    press_state,
+                                });
+                            }
+
+                            _ => return,
+                        }
                     }
+                    
+                    _ => return,
                 }
-                glfw::WindowEvent::Key(key, _, action, _) => {
-                    let keycode = key as u8 as char;
-                    let press_state = match action {
-                        Action::Release => PressState::Up,
-                        Action::Press => PressState::Down,
-                        Action::Repeat => PressState::DownRepeat,
-                    };
-                    InputEvent::KeyboardInput {
-                        keycode,
-                        press_state,
-                    }
-                }
-                _ => InputEvent::WindowClose,
-            })
-            .collect()
+            });
+
+        input_events
     }
 }
 
@@ -106,4 +134,8 @@ pub enum InputEvent {
         press_state: PressState,
     },
     WindowClose,
+    WindowResize {
+        width: u16,
+        height: u16,
+    },
 }
