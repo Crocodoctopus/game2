@@ -17,10 +17,12 @@ pub struct Client<'a> {
     render_state: GameRenderState<'a>,
 
     // Diagnostic.
-    acc_n: u64,
+    update_n: u64,
     prestep_acc: u64,
     step_acc: u64,
     poststep_acc: u64,
+
+    render_n: u64,
     render_acc: u64,
 }
 
@@ -36,11 +38,12 @@ impl<'a> Client<'a> {
             render_ts: crate::timestamp_as_usecs(),
             render_state: GameRenderState::new(root, window),
 
-            acc_n: 0,
+            update_n: 0,
             prestep_acc: 0,
             step_acc: 0,
             poststep_acc: 0,
             render_acc: 0,
+            render_n: 0,
         }
     }
 
@@ -52,7 +55,7 @@ impl<'a> Client<'a> {
         // Record inputs.
         self.input_events.extend(input_events.clone());
 
-        //
+        // Run update "thread" if enough time has passed.
         let next_timestamp = crate::timestamp_as_usecs();
         if next_timestamp - self.update_ts >= frametime {
             // Prestep.
@@ -80,34 +83,42 @@ impl<'a> Client<'a> {
             let ts = timestamp_as_usecs();
             game_frame = Some(self.update_state.poststep(self.update_ts));
             self.poststep_acc += timestamp_as_usecs() - ts;
+
+            self.update_n += 1;
         }
 
-        // Render.
-        let ts = timestamp_as_usecs();
-        self.render_state
-            .handle_events(input_events.iter());
-        self.render_state
-            .render(self.render_ts, game_frame);
-        self.render_ts += frametime;
-        self.render_acc += timestamp_as_usecs() - ts;
+        // Run render "thread".
+        {
+            let ts = timestamp_as_usecs();
+            self.render_state.handle_events(input_events.iter());
+            if let Some(game_frame) = game_frame {
+                self.render_state
+                    .process_game_frame(self.render_ts, game_frame);
+            }
+            self.render_state.render();
+            self.render_ts += frametime;
+            self.render_acc += timestamp_as_usecs() - ts;
+            self.render_n += 1;
+        }
 
-        self.acc_n += 1;
-        if self.acc_n > 60 * 5 {
+        // Time printing.
+        if self.render_n > 60 * 5 {
             println!(
                 "Frame: {:.2}ms.\n  Prestep: {:.2}ms.\n  Step: {:.2}ms.\n  Poststep: {:.2}ms.\n  Render: {:.2}ms.",
-                ((self.prestep_acc + self.step_acc + self.poststep_acc + self.render_acc)
-                    / self.acc_n) as f32
+                ((self.prestep_acc + self.step_acc + self.poststep_acc)
+                    / self.update_n + (self.render_acc) / self.render_n) as f32
                     * 0.001,
-                (self.prestep_acc / self.acc_n) as f32 * 0.001,
-                (self.step_acc / self.acc_n) as f32 * 0.001,
-                (self.poststep_acc / self.acc_n) as f32 * 0.001,
-                (self.render_acc / self.acc_n) as f32 * 0.001
+                (self.prestep_acc / self.update_n) as f32 * 0.001,
+                (self.step_acc / self.update_n) as f32 * 0.001,
+                (self.poststep_acc / self.update_n) as f32 * 0.001,
+                (self.render_acc / self.update_n) as f32 * 0.001
             );
             self.prestep_acc = 0;
             self.step_acc = 0;
             self.poststep_acc = 0;
             self.render_acc = 0;
-            self.acc_n = 0;
+            self.update_n = 0;
+            self.render_n = 0;
         }
 
         return false;

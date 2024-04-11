@@ -582,11 +582,13 @@ impl<'a> GameRenderState<'a> {
         false
     }
 
-    pub fn render(&mut self, _ts: u64, game_frame: Option<GameFrame>) {
-        if let Some(game_frame) = game_frame {
-            self.last_game_frame = Some(game_frame);
-        }
+    pub fn process_game_frame(&mut self, _ts: u64, game_frame: GameFrame) {
+        self.last_game_frame = Some(game_frame);
 
+        // =/
+    }
+
+    pub fn render(&mut self) {
         let game_frame = match &self.last_game_frame {
             Some(game_frame) => game_frame.clone(),
             _ => return,
@@ -609,9 +611,9 @@ impl<'a> GameRenderState<'a> {
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1,
-                        g: 0.2,
-                        b: 0.3,
+                        r: 0x15 as f64 / 255.,
+                        g: 0x9F as f64 / 255.,
+                        b: 0xEA as f64 / 255.,
                         a: 1.0,
                     }),
                     store: wgpu::StoreOp::Store,
