@@ -85,7 +85,9 @@ impl<'a> Client<'a> {
         // Render.
         let ts = timestamp_as_usecs();
         self.render_state
-            .render(self.render_ts, game_frame, input_events.iter());
+            .handle_events(input_events.iter());
+        self.render_state
+            .render(self.render_ts, game_frame);
         self.render_ts += frametime;
         self.render_acc += timestamp_as_usecs() - ts;
 

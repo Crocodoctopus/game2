@@ -64,6 +64,7 @@ pub struct GameRenderState<'a> {
     last_game_frame: Option<GameFrame>,
 
     // State.
+    surface_config: wgpu::SurfaceConfiguration,
     surface: wgpu::Surface<'a>,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -96,7 +97,7 @@ pub struct GameRenderState<'a> {
 impl<'a> GameRenderState<'a> {
     pub fn new(_root: &'static Path, window: &'a Window) -> Self {
         // General initialization of render state.
-        let (surface, device, queue, format) = {
+        let (surface, device, queue, surface_config) = {
             // Instance.
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::all(),
@@ -126,22 +127,19 @@ impl<'a> GameRenderState<'a> {
             .unwrap();
 
             //
-            let format = wgpu::TextureFormat::Bgra8Unorm;
-            surface.configure(
-                &device,
-                &wgpu::SurfaceConfiguration {
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    format,
-                    width: 1280,
-                    height: 720,
-                    present_mode: wgpu::PresentMode::Fifo,
-                    desired_maximum_frame_latency: 1,
-                    alpha_mode: wgpu::CompositeAlphaMode::Auto,
-                    view_formats: vec![],
-                },
-            );
+            let surface_config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                width: 0,
+                height: 0,
+                present_mode: wgpu::PresentMode::Fifo,
+                desired_maximum_frame_latency: 1,
+                alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                view_formats: vec![],
+            };
+            //surface.configure(&device, &surface_config);
 
-            (surface, device, queue, format)
+            (surface, device, queue, surface_config)
         };
 
         // Load texture data
@@ -422,7 +420,7 @@ impl<'a> GameRenderState<'a> {
                     module: &shader,
                     entry_point: "fs_main",
                     targets: &[Some(wgpu::ColorTargetState {
-                        format,
+                        format: surface_config.format,
                         blend: Some(wgpu::BlendState::REPLACE),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -500,7 +498,7 @@ impl<'a> GameRenderState<'a> {
                     module: &shader,
                     entry_point: "fs_main",
                     targets: &[Some(wgpu::ColorTargetState {
-                        format,
+                        format: surface_config.format,
                         blend: Some(wgpu::BlendState {
                             color: wgpu::BlendComponent {
                                 src_factor: wgpu::BlendFactor::Dst,
@@ -539,6 +537,7 @@ impl<'a> GameRenderState<'a> {
             surface,
             device,
             queue,
+            surface_config,
 
             quad_ibo,
 
@@ -561,12 +560,29 @@ impl<'a> GameRenderState<'a> {
         }
     }
 
-    pub fn render<'b>(
+    pub fn handle_events<'e>(
         &mut self,
-        _ts: u64,
-        game_frame: Option<GameFrame>,
-        input_events: impl Iterator<Item = &'b InputEvent>,
-    ) {
+        input_events: impl Iterator<Item = &'e InputEvent>,
+    ) -> bool {
+        for &event in input_events {
+            match event {
+                InputEvent::WindowClose => return true,
+
+                InputEvent::WindowResize { width, height } => {
+                    self.surface_config.width = width as u32;
+                    self.surface_config.height = height as u32;
+                    self.surface.configure(&self.device, &self.surface_config);
+                }
+
+                // Most events are ignored.
+                _ => {}
+            }
+        }
+
+        false
+    }
+
+    pub fn render(&mut self, _ts: u64, game_frame: Option<GameFrame>) {
         if let Some(game_frame) = game_frame {
             self.last_game_frame = Some(game_frame);
         }
