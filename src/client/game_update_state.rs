@@ -5,6 +5,8 @@ use std::path::Path;
 
 pub struct GameUpdateState {
     //Input.
+    window_width: usize,
+    window_height: usize,
     mouse_x: usize,
     mouse_y: usize,
     mouse_x_rel: usize,
@@ -71,6 +73,8 @@ impl GameUpdateState {
 
         Self {
             // Input.
+            window_width: 0,
+            window_height: 0,
             mouse_x: 0,
             mouse_y: 0,
             mouse_x_rel: 0,
@@ -93,15 +97,24 @@ impl GameUpdateState {
         }
     }
 
-    pub fn prestep<'a>(&mut self, ts: u64, input_events: impl Iterator<Item = &'a InputEvent>) -> bool {
+    pub fn prestep<'a>(
+        &mut self,
+        ts: u64,
+        input_events: impl Iterator<Item = &'a InputEvent>,
+    ) -> bool {
         let shift = |queue: &mut _| *queue = *queue << 1 | *queue & !1;
         shift(&mut self.right_queue);
         shift(&mut self.left_queue);
         shift(&mut self.jump_queue);
 
-        for e in input_events {
+        for &e in input_events {
             use crate::window::*;
             match e {
+                InputEvent::WindowClose => return true,
+                InputEvent::WindowResize { width, height } => {
+                    self.window_width = width as usize;
+                    self.window_height = height as usize;
+                }
                 InputEvent::KeyboardInput {
                     keycode,
                     press_state,
@@ -132,7 +145,7 @@ impl GameUpdateState {
                 }
 
                 InputEvent::MouseMove { x, y } => {
-                    let (x, y) = (x / 1280., y / 720.);
+                    let (x, y) = (x / self.window_width as f32, y / self.window_height as f32);
                     self.mouse_x_rel = (x * self.viewport_w as f32) as usize;
                     self.mouse_y_rel = (y * self.viewport_h as f32) as usize;
                     self.mouse_x = self.viewport_x + self.mouse_x_rel;

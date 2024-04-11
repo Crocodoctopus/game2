@@ -21,14 +21,8 @@ impl EventLoop {
         Self { event_loop }
     }
 
-    pub fn poll(
-        &mut self,
-    ) -> (
-        impl Iterator<Item = InputEvent>,
-        impl Iterator<Item = WindowEvent>,
-    ) {
+    pub fn poll(&mut self) -> impl Iterator<Item = InputEvent> {
         let mut input_events = Vec::new();
-        let mut window_events = Vec::new();
         use winit::platform::pump_events::EventLoopExtPumpEvents;
         #[rustfmt::skip]
         let status = self
@@ -58,7 +52,16 @@ impl EventLoop {
 
                             // Window close event.
                             winit::event::WindowEvent::CloseRequested => {
-                                window_events.push(WindowEvent::WindowClose);
+                                input_events.push(InputEvent::WindowClose);
+                            }
+
+                            // Window resize event.
+                            winit::event::WindowEvent::Resized(size) => {
+                                println!("Window resize!");
+                                input_events.push(InputEvent::WindowResize {
+                                    width: size.width as u16,
+                                    height: size.height as u16,
+                                });
                             }
 
                             // Mouse move event.
@@ -98,7 +101,7 @@ impl EventLoop {
                 }
             });
 
-        (input_events.into_iter(), window_events.into_iter())
+        input_events.into_iter()
     }
 }
 
@@ -131,8 +134,9 @@ pub enum InputEvent {
         mouse_button: MouseButton,
         press_state: PressState,
     },
-}
-
-pub enum WindowEvent {
     WindowClose,
+    WindowResize {
+        width: u16,
+        height: u16,
+    },
 }

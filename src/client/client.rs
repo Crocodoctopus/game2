@@ -62,7 +62,9 @@ impl<'a> Client<'a> {
             // Prestep.
             let ts = timestamp_as_usecs();
             {
-                let end = self.update_state.prestep(self.update_ts, self.input_events.iter());
+                let end = self
+                    .update_state
+                    .prestep(self.update_ts, self.input_events.iter());
                 self.input_events.clear();
                 if end {
                     return true;

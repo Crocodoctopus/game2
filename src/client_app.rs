@@ -1,6 +1,6 @@
 use crate::client::Client;
 use crate::server::Server;
-use crate::{EventLoop, Window, WindowEvent};
+use crate::{EventLoop, Window};
 use std::path::Path;
 
 pub struct ClientApp<'a> {
@@ -40,12 +40,7 @@ impl<'a> ClientApp<'a> {
             server.update_once();
 
             // Poll events.
-            let (input_events, window_events) = event_loop.poll();
-            for event in window_events {
-                match event {
-                    WindowEvent::WindowClose => break 'end,
-                }
-            }
+            let input_events = event_loop.poll();
 
             // Update client.
             let brk = client.update_once(&window, input_events);

@@ -360,7 +360,7 @@ impl<'a> GameRenderState<'a> {
                     ],
                     label: Some("Tile Bind Group Layout"),
                 });
-                
+
                 let fg_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     layout: &layout,
                     entries: &[
