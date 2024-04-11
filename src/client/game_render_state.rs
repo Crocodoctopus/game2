@@ -1,5 +1,5 @@
 use crate::client::GameFrame;
-use crate::window::Window;
+use crate::window::{InputEvent, Window};
 use futures::executor::block_on;
 use nalgebra_glm::*;
 use std::path::Path;
@@ -561,16 +561,86 @@ impl<'a> GameRenderState<'a> {
         }
     }
 
-    pub fn render(&mut self, _ts: u64, game_frame: Option<GameFrame>) {
+    pub fn render<'b>(
+        &mut self,
+        _ts: u64,
+        game_frame: Option<GameFrame>,
+        input_events: impl Iterator<Item = &'b InputEvent>,
+    ) {
         if let Some(game_frame) = game_frame {
             self.last_game_frame = Some(game_frame);
         }
 
         let game_frame = match &self.last_game_frame {
-            Some(game_frame) => game_frame,
+            Some(game_frame) => game_frame.clone(),
             _ => return,
         };
 
+        // Whisked away to a far oof place.
+        self.process_view_matrix(&game_frame);
+        let light_vertex_input = self.process_light_state(&game_frame);
+        let (fg_vertex_input, fg_count, bg_vertex_input, bg_count) =
+            self.process_tile_state(&game_frame);
+
+        // Begin rendering.
+        let output = self.surface.get_current_texture().unwrap();
+        let view = output.texture.create_view(&<_>::default());
+        let mut encoder = self.device.create_command_encoder(&<_>::default());
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.1,
+                        g: 0.2,
+                        b: 0.3,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+        });
+
+        // Generic IBO and misc group.
+        render_pass.set_index_buffer(self.quad_ibo.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.set_bind_group(0, &self.misc_bind_group, &[]);
+
+        // Tile rendering.
+        {
+            // Pipeline and tile bind group are shared.
+            render_pass.set_pipeline(&self.tile_pipeline);
+
+            // BG Tile Rendering.
+            render_pass.set_bind_group(1, &self.bg_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, bg_vertex_input.slice(..));
+            render_pass.draw_indexed(0..bg_count * 5, 0, 0..1);
+
+            // FG Tile Rendering.
+            render_pass.set_bind_group(1, &self.fg_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, fg_vertex_input.slice(..));
+            render_pass.draw_indexed(0..fg_count * 5, 0, 0..1);
+        }
+
+        // Light rendering.
+        {
+            render_pass.set_pipeline(&self.light_pipeline);
+            render_pass.set_bind_group(1, &self.light_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, light_vertex_input.slice(..));
+            render_pass.draw_indexed(0..4, 0, 0..1);
+        }
+
+        // End rendering.
+        drop(render_pass);
+        self.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+    }
+
+    fn process_view_matrix(&mut self, game_frame: &GameFrame) {
         // Calculate view matrix.
         let view = {
             let view = Mat3::identity();
@@ -587,6 +657,86 @@ impl<'a> GameRenderState<'a> {
             view
         };
 
+        self.queue.write_buffer(
+            &self.view_uniform,
+            0,
+            bytemuck::cast_slice(&[Mat4(nalgebra_glm::mat3_to_mat4(&view).into())]),
+        );
+    }
+
+    fn process_light_state(&mut self, game_frame: &GameFrame) -> wgpu::Buffer {
+        // Calculate light data.
+        let rgba: Vec<u8> = (0..game_frame.light_w * game_frame.light_h)
+            .into_iter()
+            .flat_map(|i| {
+                [
+                    game_frame.r_channel[i],
+                    game_frame.g_channel[i],
+                    game_frame.b_channel[i],
+                    255,
+                ]
+            })
+            .collect();
+        let light_x = game_frame.light_x as f32;
+        let light_y = game_frame.light_y as f32;
+        let light_w = game_frame.light_w as f32;
+        let light_h = game_frame.light_h as f32;
+        let mut light_vertices = [
+            LightVertexInput {
+                light_xy: [light_x * 16., light_y * 16.],
+                light_uv: [0., 0.],
+            },
+            LightVertexInput {
+                light_xy: [(light_x + light_w) * 16., light_y * 16.],
+                light_uv: [light_w, 0.],
+            },
+            LightVertexInput {
+                light_xy: [(light_x + light_w) * 16., (light_y + light_h) * 16.],
+                light_uv: [light_w, light_h],
+            },
+            LightVertexInput {
+                light_xy: [light_x * 16., (light_y + light_h) * 16.],
+                light_uv: [0., light_h],
+            },
+        ];
+
+        // Upload light texture.
+        self.queue.write_texture(
+            wgpu::ImageCopyTextureBase {
+                texture: &self.light_tex.0,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * game_frame.light_w as u32),
+                rows_per_image: Some(game_frame.light_h as u32),
+            },
+            wgpu::Extent3d {
+                width: game_frame.light_w as u32,
+                height: game_frame.light_h as u32,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        // Upload light vbo data.
+        let light_vertex_input =
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Light Vertex Input Buffer"),
+                    contents: bytemuck::cast_slice(&light_vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+
+        light_vertex_input
+    }
+
+    fn process_tile_state(
+        &mut self,
+        game_frame: &GameFrame,
+    ) -> (wgpu::Buffer, u32, wgpu::Buffer, u32) {
         // Calculate tile vertex data.
         let max_tiles = (game_frame.tiles_w - 2) * (game_frame.tiles_h - 2);
         let mut fg_vertex_tiles = Vec::with_capacity(4 * max_tiles);
@@ -748,166 +898,29 @@ impl<'a> GameRenderState<'a> {
             };
         }
 
-        // Calculate light data.
-        let rgba: Vec<u8> = (0..game_frame.light_w * game_frame.light_h)
-            .into_iter()
-            .flat_map(|i| {
-                [
-                    game_frame.r_channel[i],
-                    game_frame.g_channel[i],
-                    game_frame.b_channel[i],
-                    255,
-                ]
-            })
-            .collect();
-        let light_x = game_frame.light_x as f32;
-        let light_y = game_frame.light_y as f32;
-        let light_w = game_frame.light_w as f32;
-        let light_h = game_frame.light_h as f32;
-        let mut light_vertices = [
-            LightVertexInput {
-                light_xy: [light_x * 16., light_y * 16.],
-                light_uv: [0., 0.],
-            },
-            LightVertexInput {
-                light_xy: [(light_x + light_w) * 16., light_y * 16.],
-                light_uv: [light_w, 0.],
-            },
-            LightVertexInput {
-                light_xy: [(light_x + light_w) * 16., (light_y + light_h) * 16.],
-                light_uv: [light_w, light_h],
-            },
-            LightVertexInput {
-                light_xy: [light_x * 16., (light_y + light_h) * 16.],
-                light_uv: [0., light_h],
-            },
-        ];
-
-        // Begin rendering.
-        {
-            // Upload view uniform.
-            {
-                self.queue.write_buffer(
-                    &self.view_uniform,
-                    0,
-                    bytemuck::cast_slice(&[Mat4(nalgebra_glm::mat3_to_mat4(&view).into())]),
-                );
-            }
-
-            // Upload light vbo data.
-            let light_vertex_input =
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Light Vertex Input Buffer"),
-                        contents: bytemuck::cast_slice(&light_vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-
-            // Upload light texture.
-            self.queue.write_texture(
-                wgpu::ImageCopyTextureBase {
-                    texture: &self.light_tex.0,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &rgba,
-                wgpu::ImageDataLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * game_frame.light_w as u32),
-                    rows_per_image: Some(game_frame.light_h as u32),
-                },
-                wgpu::Extent3d {
-                    width: game_frame.light_w as u32,
-                    height: game_frame.light_h as u32,
-                    depth_or_array_layers: 1,
-                },
-            );
-
-            // Upload fg tile vbo data.
-            let fg_vertex_input =
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("FG Vertex Buffer"),
-                        contents: bytemuck::cast_slice(&fg_vertex_tiles),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-
-            // Upload tile vbo data.
-            let bg_vertex_input =
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("BG Vertex Buffer"),
-                        contents: bytemuck::cast_slice(&bg_vertex_tiles),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-
-            let output = match self.surface.get_current_texture() {
-                Err(wgpu::SurfaceError::Timeout) => return,
-                Ok(output) => output,
-                _ => panic!(),
-            };
-
-            let view = output
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Render Encoder"),
-                });
-
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
+        // Upload fg tile vbo data.
+        let fg_vertex_input = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("FG Vertex Buffer"),
+                contents: bytemuck::cast_slice(&fg_vertex_tiles),
+                usage: wgpu::BufferUsages::VERTEX,
             });
 
-            // Generic IBO and misc group.
-            render_pass.set_index_buffer(self.quad_ibo.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.set_bind_group(0, &self.misc_bind_group, &[]);
+        // Upload tile vbo data.
+        let bg_vertex_input = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("BG Vertex Buffer"),
+                contents: bytemuck::cast_slice(&bg_vertex_tiles),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
 
-            // Tile rendering.
-            {
-                // Pipeline and tile bind group are shared.
-                render_pass.set_pipeline(&self.tile_pipeline);
-
-                // BG Tile Rendering.
-                render_pass.set_bind_group(1, &self.bg_bind_group, &[]);
-                render_pass.set_vertex_buffer(0, bg_vertex_input.slice(..));
-                render_pass.draw_indexed(0..bg_vertex_tiles.len() as u32 / 4 * 5, 0, 0..1);
-
-                // FG Tile Rendering.
-                render_pass.set_bind_group(1, &self.fg_bind_group, &[]);
-                render_pass.set_vertex_buffer(0, fg_vertex_input.slice(..));
-                render_pass.draw_indexed(0..fg_vertex_tiles.len() as u32 / 4 * 5, 0, 0..1);
-            }
-
-            // Light rendering.
-            {
-                render_pass.set_pipeline(&self.light_pipeline);
-                render_pass.set_bind_group(1, &self.light_bind_group, &[]);
-                render_pass.set_vertex_buffer(0, light_vertex_input.slice(..));
-                render_pass.draw_indexed(0..4, 0, 0..1);
-            }
-
-            drop(render_pass);
-            self.queue.submit(std::iter::once(encoder.finish()));
-            output.present();
-        }
+        (
+            fg_vertex_input,
+            fg_vertex_tiles.len() as u32 / 4,
+            bg_vertex_input,
+            bg_vertex_tiles.len() as u32 / 4,
+        )
     }
 }

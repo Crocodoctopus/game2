@@ -1,5 +1,6 @@
 use crate::shared::Tile;
 
+#[derive(Clone, Debug)]
 pub struct GameFrame {
     // Viewport.
     pub viewport_x: f32,

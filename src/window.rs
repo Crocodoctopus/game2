@@ -21,7 +21,7 @@ impl EventLoop {
         Self { event_loop }
     }
 
-    pub fn poll(&mut self) -> impl Iterator<Item = InputEvent> {
+    pub fn poll(&mut self) -> Vec<InputEvent> {
         let mut input_events = Vec::new();
         use winit::platform::pump_events::EventLoopExtPumpEvents;
         #[rustfmt::skip]
@@ -29,10 +29,10 @@ impl EventLoop {
             .event_loop
             .pump_events(Some(std::time::Duration::ZERO), |event, _| {
                 match event {
-                    winit::event::Event::WindowEvent { window_id, event } => {
+                    winit::event::Event::WindowEvent { window_id: _, event } => {
                         match event {
                             // Keyboard input event.
-                            winit::event::WindowEvent::KeyboardInput { device_id, event, is_synthetic } => {
+                            winit::event::WindowEvent::KeyboardInput { device_id: _, event, is_synthetic: _ } => {
                                 use winit::platform::scancode::PhysicalKeyExtScancode;
                                 let keycode = match &event.logical_key {
                                     winit::keyboard::Key::Character(c) => c.as_str().chars().next().unwrap(),
@@ -57,7 +57,6 @@ impl EventLoop {
 
                             // Window resize event.
                             winit::event::WindowEvent::Resized(size) => {
-                                println!("Window resize!");
                                 input_events.push(InputEvent::WindowResize {
                                     width: size.width as u16,
                                     height: size.height as u16,
@@ -65,7 +64,7 @@ impl EventLoop {
                             }
 
                             // Mouse move event.
-                            winit::event::WindowEvent::CursorMoved { device_id, position } => {
+                            winit::event::WindowEvent::CursorMoved { device_id: _, position } => {
                                 input_events.push(InputEvent::MouseMove {
                                     x: position.x as f32,
                                     y: position.y as f32,
@@ -73,7 +72,7 @@ impl EventLoop {
                             }
 
                             // Mouse click event.
-                            winit::event::WindowEvent::MouseInput { device_id, state, button } => {
+                            winit::event::WindowEvent::MouseInput { device_id: _, state, button } => {
                                 let mouse_button = match button {
                                     winit::event::MouseButton::Left => MouseButton::Left,
                                     winit::event::MouseButton::Right => MouseButton::Right,
@@ -101,7 +100,7 @@ impl EventLoop {
                 }
             });
 
-        input_events.into_iter()
+        input_events
     }
 }
 

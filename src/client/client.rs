@@ -44,17 +44,13 @@ impl<'a> Client<'a> {
         }
     }
 
-    pub fn update_once(
-        &mut self,
-        window: &'a Window,
-        input_events: impl Iterator<Item = InputEvent>,
-    ) -> bool {
+    pub fn update_once(&mut self, window: &'a Window, input_events: Vec<InputEvent>) -> bool {
         let frametime = 16666_u64;
 
         let mut game_frame = None;
 
         // Record inputs.
-        self.input_events.extend(input_events);
+        self.input_events.extend(input_events.clone());
 
         //
         let next_timestamp = crate::timestamp_as_usecs();
@@ -88,7 +84,8 @@ impl<'a> Client<'a> {
 
         // Render.
         let ts = timestamp_as_usecs();
-        self.render_state.render(self.render_ts, game_frame);
+        self.render_state
+            .render(self.render_ts, game_frame, input_events.iter());
         self.render_ts += frametime;
         self.render_acc += timestamp_as_usecs() - ts;
 
