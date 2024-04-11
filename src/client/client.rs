@@ -8,6 +8,7 @@ pub struct Client<'a> {
     server_port: u16,
 
     // Update.
+    input_events: Vec<InputEvent>,
     update_ts: u64,
     update_state: GameUpdateState,
 
@@ -28,6 +29,7 @@ impl<'a> Client<'a> {
         Self {
             server_port,
 
+            input_events: vec![],
             update_ts: crate::timestamp_as_usecs(),
             update_state: GameUpdateState::new(root),
 
@@ -49,34 +51,38 @@ impl<'a> Client<'a> {
     ) -> bool {
         let frametime = 16666_u64;
 
+        let mut game_frame = None;
+
+        // Record inputs.
+        self.input_events.extend(input_events);
+
         //
         let next_timestamp = crate::timestamp_as_usecs();
-        if next_timestamp - self.update_ts < frametime {
-            return false;
-        }
-
-        // Prestep.
-        let ts = timestamp_as_usecs();
-        {
-            let end = self.update_state.prestep(self.update_ts, input_events);
-            if end {
-                return true;
+        if next_timestamp - self.update_ts >= frametime {
+            // Prestep.
+            let ts = timestamp_as_usecs();
+            {
+                let end = self.update_state.prestep(self.update_ts, self.input_events.iter());
+                self.input_events.clear();
+                if end {
+                    return true;
+                }
             }
-        }
-        self.prestep_acc += timestamp_as_usecs() - ts;
+            self.prestep_acc += timestamp_as_usecs() - ts;
 
-        // Step.
-        let ts = timestamp_as_usecs();
-        while self.update_ts + frametime <= next_timestamp {
-            self.update_state.step(self.update_ts, frametime);
-            self.update_ts += frametime;
-        }
-        self.step_acc += timestamp_as_usecs() - ts;
+            // Step.
+            let ts = timestamp_as_usecs();
+            while self.update_ts + frametime <= next_timestamp {
+                self.update_state.step(self.update_ts, frametime);
+                self.update_ts += frametime;
+            }
+            self.step_acc += timestamp_as_usecs() - ts;
 
-        // Poststep.
-        let ts = timestamp_as_usecs();
-        let game_frame = self.update_state.poststep(self.update_ts);
-        self.poststep_acc += timestamp_as_usecs() - ts;
+            // Poststep.
+            let ts = timestamp_as_usecs();
+            game_frame = Some(self.update_state.poststep(self.update_ts));
+            self.poststep_acc += timestamp_as_usecs() - ts;
+        }
 
         // Render.
         let ts = timestamp_as_usecs();

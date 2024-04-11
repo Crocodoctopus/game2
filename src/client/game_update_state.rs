@@ -93,7 +93,7 @@ impl GameUpdateState {
         }
     }
 
-    pub fn prestep(&mut self, ts: u64, input_events: impl Iterator<Item = InputEvent>) -> bool {
+    pub fn prestep<'a>(&mut self, ts: u64, input_events: impl Iterator<Item = &'a InputEvent>) -> bool {
         let shift = |queue: &mut _| *queue = *queue << 1 | *queue & !1;
         shift(&mut self.right_queue);
         shift(&mut self.left_queue);
@@ -106,14 +106,15 @@ impl GameUpdateState {
                     keycode,
                     press_state,
                 } => {
+                    println!("{keycode:?} {press_state:?}");
                     let bit = match press_state {
                         PressState::Up => 0,
                         PressState::Down => 1,
                         PressState::DownRepeat => 1,
                     };
                     match keycode {
-                        'D' => self.right_queue = self.right_queue & !1 | bit,
-                        'A' => self.left_queue = self.left_queue & !1 | bit,
+                        'd' => self.right_queue = self.right_queue & !1 | bit,
+                        'a' => self.left_queue = self.left_queue & !1 | bit,
                         '1' if bit == 0 => {
                             let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
                             self.fg_tiles[index] = Tile::RedTorch;
@@ -128,10 +129,10 @@ impl GameUpdateState {
                         }
                         _ => {}
                     };
-                    println!("{keycode:?} {press_state:?}")
                 }
 
                 InputEvent::MouseMove { x, y } => {
+                    let (x, y) = (x / 1280., y / 720.);
                     self.mouse_x_rel = (x * self.viewport_w as f32) as usize;
                     self.mouse_y_rel = (y * self.viewport_h as f32) as usize;
                     self.mouse_x = self.viewport_x + self.mouse_x_rel;
@@ -155,8 +156,6 @@ impl GameUpdateState {
                         _ => {}
                     }
                 }
-
-                InputEvent::WindowClose => return false,
             }
         }
 

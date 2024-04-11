@@ -7,7 +7,11 @@ use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct ViewUniform([[f32; 4]; 4]);
+struct Mat4([[f32; 4]; 4]);
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vec4([f32; 4]);
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -56,6 +60,9 @@ impl LightVertexInput {
 }
 
 pub struct GameRenderState<'a> {
+    // Game frame.
+    last_game_frame: Option<GameFrame>,
+
     // State.
     surface: wgpu::Surface<'a>,
     device: wgpu::Device,
@@ -76,7 +83,10 @@ pub struct GameRenderState<'a> {
 
     // Tile rendering.
     tile_pipeline: wgpu::RenderPipeline,
-    tile_bind_group: wgpu::BindGroup,
+    fg_const_uniform: wgpu::Buffer,
+    bg_const_uniform: wgpu::Buffer,
+    fg_bind_group: wgpu::BindGroup,
+    bg_bind_group: wgpu::BindGroup,
 
     // Light rendering.
     light_pipeline: wgpu::RenderPipeline,
@@ -124,8 +134,8 @@ impl<'a> GameRenderState<'a> {
                     format,
                     width: 1280,
                     height: 720,
-                    present_mode: wgpu::PresentMode::AutoVsync,
-                    desired_maximum_frame_latency: 3,
+                    present_mode: wgpu::PresentMode::Fifo,
+                    desired_maximum_frame_latency: 1,
                     alpha_mode: wgpu::CompositeAlphaMode::Auto,
                     view_formats: vec![],
                 },
@@ -249,7 +259,7 @@ impl<'a> GameRenderState<'a> {
         // Create camera buffer.
         let view_uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("View Uniform"),
-            size: std::mem::size_of::<ViewUniform>() as u64,
+            size: std::mem::size_of::<Mat4>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -296,13 +306,25 @@ impl<'a> GameRenderState<'a> {
             (group, layout)
         };
 
+        // Const uniforms.
+        let fg_const_uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("FG Const Uniform"),
+            usage: wgpu::BufferUsages::UNIFORM,
+            contents: bytemuck::cast_slice(&[Vec4([1.0, 1.0, 1.0, 1.0])]),
+        });
+        let bg_const_uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("FG Const Uniform"),
+            usage: wgpu::BufferUsages::UNIFORM,
+            contents: bytemuck::cast_slice(&[Vec4([0.6, 0.6, 0.7, 1.0])]),
+        });
+
         // Create tile rendering pipeline.
-        let (tile_pipeline, tile_bind_group) = {
+        let (tile_pipeline, fg_bind_group, bg_bind_group) = {
             // Shader.
             let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/tile.wgsl"));
 
             // Bind group.
-            let bind_group = {
+            let (fg_bind_group, bg_bind_group, bind_group_layout) = {
                 let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     entries: &[
                         wgpu::BindGroupLayoutEntry {
@@ -325,11 +347,21 @@ impl<'a> GameRenderState<'a> {
                             },
                             count: None,
                         },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
                     ],
                     label: Some("Tile Bind Group Layout"),
                 });
-
-                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                
+                let fg_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     layout: &layout,
                     entries: &[
                         wgpu::BindGroupEntry {
@@ -340,17 +372,40 @@ impl<'a> GameRenderState<'a> {
                             binding: 1,
                             resource: wgpu::BindingResource::TextureView(&tile_mask_tex.1),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: fg_const_uniform.as_entire_binding(),
+                        },
                     ],
-                    label: Some("Tile Bind Group"),
+                    label: Some("Tile FG Bind Group"),
                 });
 
-                (group, layout)
+                let bg_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: &layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&tile_sprite_tex.1),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&tile_mask_tex.1),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: bg_const_uniform.as_entire_binding(),
+                        },
+                    ],
+                    label: Some("Tile BG Bind Group"),
+                });
+
+                (fg_group, bg_group, layout)
             };
 
             // Pipeline layout.
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&misc_bind_group.1, &bind_group.1],
+                bind_group_layouts: &[&misc_bind_group.1, &bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -390,7 +445,7 @@ impl<'a> GameRenderState<'a> {
                 multiview: None,
             });
 
-            (pipeline, bind_group)
+            (pipeline, fg_bind_group, bg_bind_group)
         };
 
         let (light_pipeline, light_bind_group) = {
@@ -479,6 +534,8 @@ impl<'a> GameRenderState<'a> {
         };
 
         Self {
+            last_game_frame: None,
+
             surface,
             device,
             queue,
@@ -494,14 +551,26 @@ impl<'a> GameRenderState<'a> {
             light_tex,
 
             tile_pipeline,
-            tile_bind_group: tile_bind_group.0,
+            fg_const_uniform,
+            bg_const_uniform,
+            fg_bind_group,
+            bg_bind_group,
 
             light_pipeline,
             light_bind_group: light_bind_group.0,
         }
     }
 
-    pub fn render(&mut self, _ts: u64, game_frame: GameFrame) {
+    pub fn render(&mut self, _ts: u64, game_frame: Option<GameFrame>) {
+        if let Some(game_frame) = game_frame {
+            self.last_game_frame = Some(game_frame);
+        }
+
+        let game_frame = match &self.last_game_frame {
+            Some(game_frame) => game_frame,
+            _ => return,
+        };
+
         // Calculate view matrix.
         let view = {
             let view = Mat3::identity();
@@ -520,7 +589,8 @@ impl<'a> GameRenderState<'a> {
 
         // Calculate tile vertex data.
         let max_tiles = (game_frame.tiles_w - 2) * (game_frame.tiles_h - 2);
-        let mut fg_vertex_tiles = Vec::with_capacity(max_tiles);
+        let mut fg_vertex_tiles = Vec::with_capacity(4 * max_tiles);
+        let mut bg_vertex_tiles = Vec::with_capacity(4 * max_tiles);
         if max_tiles > 0 {
             // Calculate tile data and upload to GPU.
             let tile_texture_properties_lookup = &crate::shared::TILE_TEXTURE_PROPERTIES;
@@ -600,6 +670,77 @@ impl<'a> GameRenderState<'a> {
                             // Skip check bg tile.
                             continue 'x;
                         }
+
+                        // Fill FG.
+                        'skip_bg: {
+                            let tile_texture_properties =
+                                tile_texture_properties_lookup[game_frame.bg_tiles[index] as usize];
+
+                            // Get texture UV.
+                            let u = tile_texture_properties.u;
+                            let v = tile_texture_properties.v;
+
+                            // If not visible, skip.
+                            if (u, v) == (0., 0.) {
+                                break 'skip_bg;
+                            }
+
+                            // Get depth.
+                            let depth = tile_texture_properties.depth;
+
+                            // Calculate position.
+                            let x = 16. * (x + game_frame.tiles_x) as f32;
+                            let y = 16. * (y + game_frame.tiles_y) as f32;
+                            let z = depth as f32;
+
+                            // Calculate mask UV.
+                            #[rustfmt::skip]
+                            let mask_u = [ index - stride, index - stride + 1, index + 1, index + stride + 1 ]
+                                .into_iter()
+                                .rev()
+                                .map(|index| game_frame.bg_tiles[index])
+                                .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
+                                .map(|dep| (depth > dep) as u8)
+                                .reduce(|acc, bit| (acc << 1) | bit)
+                                .map(|out| (out << 2) as f32)
+                                .unwrap();
+                            #[rustfmt::skip]
+                            let mask_v  = [index + stride, index + stride - 1, index - 1, index - stride - 1 ]
+                                .into_iter()
+                                .rev()
+                                .map(|index| game_frame.bg_tiles[index])
+                                .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
+                                .map(|dep| (depth > dep) as u8)
+                                .reduce(|acc, bit| (acc << 1) | bit)
+                                .map(|out| (out << 2) as f32)
+                                .unwrap();
+
+                            bg_vertex_tiles.extend_from_slice(&[
+                                TileVertexInput {
+                                    tile_xyz: [x - 8., y - 8., z],
+                                    tile_uv: [u, v],
+                                    mask_uv: [mask_u, mask_v],
+                                },
+                                TileVertexInput {
+                                    tile_xyz: [x + 16. + 8., y - 8., z],
+                                    tile_uv: [u + 16., v],
+                                    mask_uv: [mask_u + 4., mask_v],
+                                },
+                                TileVertexInput {
+                                    tile_xyz: [x + 16. + 8., y + 16. + 8., z],
+                                    tile_uv: [u + 16., v + 16.],
+                                    mask_uv: [mask_u + 4., mask_v + 4.],
+                                },
+                                TileVertexInput {
+                                    tile_xyz: [x - 8., y + 16. + 8., z],
+                                    tile_uv: [u, v + 16.],
+                                    mask_uv: [mask_u, mask_v + 4.],
+                                },
+                            ]);
+
+                            // Skip check bg tile.
+                            continue 'x;
+                        }
                     }
                 }
 
@@ -649,7 +790,7 @@ impl<'a> GameRenderState<'a> {
                 self.queue.write_buffer(
                     &self.view_uniform,
                     0,
-                    bytemuck::cast_slice(&[ViewUniform(nalgebra_glm::mat3_to_mat4(&view).into())]),
+                    bytemuck::cast_slice(&[Mat4(nalgebra_glm::mat3_to_mat4(&view).into())]),
                 );
             }
 
@@ -683,12 +824,21 @@ impl<'a> GameRenderState<'a> {
                 },
             );
 
-            // Upload tile vbo data.
+            // Upload fg tile vbo data.
             let fg_vertex_input =
                 self.device
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("FG Vertex Buffer"),
                         contents: bytemuck::cast_slice(&fg_vertex_tiles),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+
+            // Upload tile vbo data.
+            let bg_vertex_input =
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("BG Vertex Buffer"),
+                        contents: bytemuck::cast_slice(&bg_vertex_tiles),
                         usage: wgpu::BufferUsages::VERTEX,
                     });
 
@@ -735,9 +885,14 @@ impl<'a> GameRenderState<'a> {
             {
                 // Pipeline and tile bind group are shared.
                 render_pass.set_pipeline(&self.tile_pipeline);
-                render_pass.set_bind_group(1, &self.tile_bind_group, &[]);
+
+                // BG Tile Rendering.
+                render_pass.set_bind_group(1, &self.bg_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, bg_vertex_input.slice(..));
+                render_pass.draw_indexed(0..bg_vertex_tiles.len() as u32 / 4 * 5, 0, 0..1);
 
                 // FG Tile Rendering.
+                render_pass.set_bind_group(1, &self.fg_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, fg_vertex_input.slice(..));
                 render_pass.draw_indexed(0..fg_vertex_tiles.len() as u32 / 4 * 5, 0, 0..1);
             }

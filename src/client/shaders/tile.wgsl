@@ -7,6 +7,8 @@ var generic_sampler: sampler;
 var sprite_tex: texture_2d<f32>;
 @group(1) @binding(1)
 var mask_tex: texture_2d<u32>;
+@group(1) @binding(2)
+var<uniform> rgba_mul: vec4<f32>;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -46,5 +48,5 @@ fn fs_main(in: FragmentInput) -> @location(0) vec4<f32> {
         discard;
     }
 
-    return vec4<f32>(vec3<f32>(rgb), 1.0);
+    return vec4<f32>(vec3<f32>(rgb), 1.0) * rgba_mul;
 }
