@@ -23,6 +23,9 @@ pub struct GameUpdateState {
     viewport_w: usize,
     viewport_h: usize,
 
+    // World.
+    time: f32, // 0..1
+
     // Tiles.
     world_w: usize,
     world_h: usize,
@@ -99,6 +102,9 @@ impl GameUpdateState {
             viewport_y: 32,
             viewport_w: 1280,
             viewport_h: 720,
+
+            // World.
+            time: 0.,
 
             // Tiles.
             world_w,
@@ -192,6 +198,13 @@ impl GameUpdateState {
     pub fn step(&mut self, ts: u64, ft: u64) {
         let ft = ft as f32 / 1e6;
 
+        // Update time.
+        let day_cycle = 60.;
+        self.time += ft / day_cycle;
+        if self.time > 1. {
+            self.time = 0.;
+        }
+
         // Player state stuff.
         if let Some(player) = self.humanoids.get_mut(0) {
             player.ddy += 500.;
@@ -201,7 +214,7 @@ impl GameUpdateState {
             if self.left_queue & 1 != 0 {
                 player.ddx -= 1500.;
             }
-            
+
             // Check if jump was pressed at all during the last 3 frames.
             let jump_buffer = (0..3)
                 .into_iter()
@@ -212,7 +225,7 @@ impl GameUpdateState {
             if jump_buffer && player.flags & (HumanoidFlags::OnGround as u8) != 0 {
                 player.dy -= 300.;
             }
-            
+
             // World's best friction.
             player.dx *= 0.80;
             if player.dx.abs() < 0.5 {
@@ -228,7 +241,7 @@ impl GameUpdateState {
             update_humanoid_physics_y(humanoid, ft);
             resolve_humanoid_tile_collision_y(humanoid, last_y, self.world_w, &self.fg_tiles);
             humanoid.ddy = 0.;
-            
+
             let last_x = humanoid.x;
             update_humanoid_physics_x(humanoid, ft);
             resolve_humanoid_tile_collision_x(humanoid, last_x, self.world_w, &self.fg_tiles);
@@ -247,8 +260,23 @@ impl GameUpdateState {
     }
 
     pub fn poststep(&mut self, ts: u64) -> GameRenderDesc {
-        // Lighting
+        // Lighting.
         let (light_x, light_y, light_w, light_h, r_channel, g_channel, b_channel) = {
+            // Calculate sky light value.
+            let (sky_r, sky_g, sky_b) = 'out: {
+                // Morning.
+                if self.time < 7. / 24. {
+                    break 'out (10, 10, 10);
+                }
+
+                // Day.
+                if self.time < 18. / 24. {
+                    break 'out (40, 40, 40);
+                }
+
+                break 'out (10, 10, 10);
+            };
+
             // Light lookup.
             let tile_light_property_map = &TILE_LIGHT_PROPERTIES;
 
@@ -278,9 +306,9 @@ impl GameUpdateState {
 
                     // Special case (None, None).
                     if fg_tile == Tile::None && bg_tile == Tile::None {
-                        r_channel[light_index] = LIGHT_MAX;
-                        g_channel[light_index] = LIGHT_MAX;
-                        b_channel[light_index] = LIGHT_MAX;
+                        r_channel[light_index] = sky_r;
+                        g_channel[light_index] = sky_g;
+                        b_channel[light_index] = sky_b;
                         r_probes.push(light_index as u16);
                         g_probes.push(light_index as u16);
                         b_probes.push(light_index as u16);

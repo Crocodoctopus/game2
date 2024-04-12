@@ -694,7 +694,7 @@ impl<'a> GameRenderState<'a> {
             render_pass.set_vertex_buffer(0, light_vertex_input.slice(..));
             render_pass.draw_indexed(0..4, 0, 0..1);
         }
-        
+
         // Sprite rendering.
         {
             render_pass.set_pipeline(&self.sprite_pipeline);

@@ -60,15 +60,15 @@ impl TileLightProperty {
         };
         map[Tile::RedTorch as usize] = Self {
             fade: FADE_MIN,
-            light: (LIGHT_MAX, 0, 0),
+            light: (LIGHT_MAX - 10, 0, 0),
         };
         map[Tile::GreenTorch as usize] = Self {
             fade: FADE_MIN,
-            light: (0, LIGHT_MAX, 0),
+            light: (0, LIGHT_MAX - 10, 0),
         };
         map[Tile::BlueTorch as usize] = Self {
             fade: FADE_MIN,
-            light: (0, 0, LIGHT_MAX),
+            light: (0, 0, LIGHT_MAX - 10),
         };
 
         return map;
