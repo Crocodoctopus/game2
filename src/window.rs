@@ -33,9 +33,8 @@ impl EventLoop {
                         match event {
                             // Keyboard input event.
                             winit::event::WindowEvent::KeyboardInput { device_id: _, event, is_synthetic: _ } => {
-                                use winit::platform::scancode::PhysicalKeyExtScancode;
-                                let keycode = match &event.logical_key {
-                                    winit::keyboard::Key::Character(c) => c.as_str().chars().next().unwrap(),
+                                let keycode = match &event.text {
+                                    Some(c) => c.as_str().chars().next().unwrap(),
                                     _ => return,
                                 };
 

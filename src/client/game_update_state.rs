@@ -1,5 +1,6 @@
-use crate::client::{GameRenderDesc, TileRenderDesc, SpriteRenderDesc};
-use crate::shared::{Tile, TILE_LIGHT_PROPERTIES};
+use crate::client::{GameRenderDesc, SpriteRenderDesc, TileRenderDesc};
+use crate::shared::*;
+use crate::shared::{Tile, TILE_LIGHT_PROPERTIES, TILE_SIZE};
 use crate::InputEvent;
 use std::path::Path;
 
@@ -27,9 +28,9 @@ pub struct GameUpdateState {
     world_h: usize,
     fg_tiles: Box<[Tile]>,
     bg_tiles: Box<[Tile]>,
+
     // Humanoids.
-    //player_id: usize,
-    //humanoid: Vec<Humanoids>,
+    humanoids: Vec<Humanoid>,
 }
 
 impl GameUpdateState {
@@ -60,7 +61,7 @@ impl GameUpdateState {
                     continue;
                 }
 
-                if y < 30 {
+                if y < 45 {
                     fg_tiles[index] = Tile::Stone;
                     bg_tiles[index] = Tile::Stone;
                     continue;
@@ -70,6 +71,15 @@ impl GameUpdateState {
                 bg_tiles[index] = Tile::DenseStone;
             }
         }
+
+        // Temp.
+        let humanoids = vec![Humanoid {
+            x: 64.,
+            y: 64.,
+            w: 16.,
+            h: 24.,
+            ..Default::default()
+        }];
 
         Self {
             // Input.
@@ -90,10 +100,14 @@ impl GameUpdateState {
             viewport_w: 1280,
             viewport_h: 720,
 
+            // Tiles.
             world_w,
             world_h,
             fg_tiles,
             bg_tiles,
+
+            // Humanoids.
+            humanoids,
         }
     }
 
@@ -102,7 +116,7 @@ impl GameUpdateState {
         ts: u64,
         input_events: impl Iterator<Item = &'a InputEvent>,
     ) -> bool {
-        let shift = |queue: &mut _| *queue = *queue << 1 | *queue & !1;
+        let shift = |queue: &mut _| *queue = *queue << 1 | *queue & 1;
         shift(&mut self.right_queue);
         shift(&mut self.left_queue);
         shift(&mut self.jump_queue);
@@ -119,15 +133,14 @@ impl GameUpdateState {
                     keycode,
                     press_state,
                 } => {
-                    println!("{keycode:?} {press_state:?}");
                     let bit = match press_state {
                         PressState::Up => 0,
                         PressState::Down => 1,
                         PressState::DownRepeat => 1,
                     };
                     match keycode {
-                        'd' => self.right_queue = self.right_queue & !1 | bit,
-                        'a' => self.left_queue = self.left_queue & !1 | bit,
+                        'd' | 'D' => self.right_queue = self.right_queue & !1 | bit,
+                        'a' | 'A' => self.left_queue = self.left_queue & !1 | bit,
                         ' ' => self.jump_queue = self.jump_queue & !1 | bit,
                         '1' if bit == 0 => {
                             let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
@@ -176,7 +189,62 @@ impl GameUpdateState {
         false
     }
 
-    pub fn step(&mut self, ts: u64, ft: u64) {}
+    pub fn step(&mut self, ts: u64, ft: u64) {
+        let ft = ft as f32 / 1e6;
+
+        // Player state stuff.
+        if let Some(player) = self.humanoids.get_mut(0) {
+            player.ddy += 500.;
+            if self.right_queue & 1 != 0 {
+                player.ddx += 1500.;
+            }
+            if self.left_queue & 1 != 0 {
+                player.ddx -= 1500.;
+            }
+            
+            // Check if jump was pressed at all during the last 3 frames.
+            let jump_buffer = (0..3)
+                .into_iter()
+                .map(|i| self.jump_queue >> i & 0b11 == 0b01)
+                .reduce(|b, acc| acc | b)
+                .unwrap();
+
+            if jump_buffer && player.flags & (HumanoidFlags::OnGround as u8) != 0 {
+                player.dy -= 300.;
+            }
+            
+            // World's best friction.
+            player.dx *= 0.80;
+            if player.dx.abs() < 0.5 {
+                player.dx = 0.;
+            }
+        }
+
+        // Humanoid physics stuff.
+        for humanoid in &mut self.humanoids {
+            humanoid.flags &= !(HumanoidFlags::OnGround as u8);
+
+            let last_y = humanoid.y;
+            update_humanoid_physics_y(humanoid, ft);
+            resolve_humanoid_tile_collision_y(humanoid, last_y, self.world_w, &self.fg_tiles);
+            humanoid.ddy = 0.;
+            
+            let last_x = humanoid.x;
+            update_humanoid_physics_x(humanoid, ft);
+            resolve_humanoid_tile_collision_x(humanoid, last_x, self.world_w, &self.fg_tiles);
+            humanoid.ddx = 0.;
+        }
+
+        // Clamp position (TODO: right-bottom world clamp).
+        if let Some(player) = self.humanoids.get(0) {
+            self.viewport_x =
+                ((player.x + player.w / 2.) as usize).saturating_sub(self.viewport_w / 2);
+            self.viewport_y =
+                ((player.y + player.h / 2.) as usize).saturating_sub(self.viewport_h / 2);
+        }
+        self.viewport_x = std::cmp::max(2 * TILE_SIZE, self.viewport_x);
+        self.viewport_y = std::cmp::max(2 * TILE_SIZE, self.viewport_y);
+    }
 
     pub fn poststep(&mut self, ts: u64) -> GameRenderDesc {
         // Lighting
@@ -264,8 +332,10 @@ impl GameUpdateState {
             let y1 = (self.viewport_y - 4) / 16 - 1;
             let x2 = (self.viewport_x + self.viewport_w + 4 + 15) / 16 + 1;
             let y2 = (self.viewport_y + self.viewport_h + 4 + 15) / 16 + 1;
-            let mut fg_tiles = vec![TileRenderDesc(Tile::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
-            let mut bg_tiles = vec![TileRenderDesc(Tile::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
+            let mut fg_tiles =
+                vec![TileRenderDesc(Tile::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
+            let mut bg_tiles =
+                vec![TileRenderDesc(Tile::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
             let w = x2 - x1;
             let h = y2 - y1;
             for y in 0..h {
@@ -279,20 +349,27 @@ impl GameUpdateState {
             (x1, y1, x2 - x1, y2 - y1, fg_tiles, bg_tiles)
         };
 
+        // Clone sprites.
+        let sprites = self
+            .humanoids
+            .iter()
+            .map(|humanoid| SpriteRenderDesc {
+                x: humanoid.x.floor(),
+                y: humanoid.y.floor(),
+                w: humanoid.w,
+                h: humanoid.h,
+                u: 0.,
+                v: 0.,
+            })
+            .collect();
+
         GameRenderDesc {
             viewport_x: self.viewport_x as f32,
             viewport_y: self.viewport_y as f32,
             viewport_w: self.viewport_w as f32,
             viewport_h: self.viewport_h as f32,
 
-            sprites: Box::new([ SpriteRenderDesc {
-                x: 64.,
-                y: 64.,
-                w: 64.,
-                h: 64.,
-                u: 0.,
-                v: 0.,
-            }]),
+            sprites,
 
             light_x,
             light_y,

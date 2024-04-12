@@ -158,7 +158,11 @@ impl<'a> GameRenderState<'a> {
                 &queue,
                 &TextureDescriptor {
                     label: None,
-                    size: Extent3d { width, height, depth_or_array_layers: 1 },
+                    size: Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: TextureDimension::D2,
@@ -180,7 +184,7 @@ impl<'a> GameRenderState<'a> {
             let view = texture.create_view(&<_>::default());
             (texture, view)
         };
-        
+
         let tile_sprite_tex = {
             let texture =
                 image::load_from_memory(include_bytes!("../../resources/tile_sheet.png")).unwrap();
@@ -250,29 +254,25 @@ impl<'a> GameRenderState<'a> {
         let misc_bind_group = {
             let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: Some("Misc Bind Group Layout"),
-                entries: &[
-                    BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::VERTEX,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                entries: &[BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::VERTEX,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                ],
+                    count: None,
+                }],
             });
 
             let group = device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Misc Bind Group"),
                 layout: &layout,
-                entries: &[
-                    BindGroupEntry {
-                        binding: 0,
-                        resource: view_uniform.as_entire_binding(),
-                    },
-                ],
+                entries: &[BindGroupEntry {
+                    binding: 0,
+                    resource: view_uniform.as_entire_binding(),
+                }],
             });
 
             (group, layout)
@@ -504,7 +504,7 @@ impl<'a> GameRenderState<'a> {
 
             (pipeline, bind_group)
         };
-        
+
         let (sprite_pipeline, sprite_bind_group) = {
             // Shader.
             let shader = device.create_shader_module(include_wgsl!("shaders/sprite.wgsl"));
@@ -671,14 +671,6 @@ impl<'a> GameRenderState<'a> {
         render_pass.set_index_buffer(self.quad_ibo.slice(..), IndexFormat::Uint16);
         render_pass.set_bind_group(0, &self.misc_bind_group, &[]);
 
-        // Sprite rendering.
-        {
-            render_pass.set_pipeline(&self.sprite_pipeline);
-            render_pass.set_bind_group(1, &self.sprite_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, sprite_vertex_input.slice(..));
-            render_pass.draw_indexed(0..sprite_count * 5, 0, 0..1);
-        }
-
         // Tile rendering.
         {
             // Pipeline and tile bind group are shared.
@@ -701,6 +693,14 @@ impl<'a> GameRenderState<'a> {
             render_pass.set_bind_group(1, &self.light_bind_group, &[]);
             render_pass.set_vertex_buffer(0, light_vertex_input.slice(..));
             render_pass.draw_indexed(0..4, 0, 0..1);
+        }
+        
+        // Sprite rendering.
+        {
+            render_pass.set_pipeline(&self.sprite_pipeline);
+            render_pass.set_bind_group(1, &self.sprite_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, sprite_vertex_input.slice(..));
+            render_pass.draw_indexed(0..sprite_count * 5, 0, 0..1);
         }
 
         // End rendering.
@@ -800,10 +800,10 @@ impl<'a> GameRenderState<'a> {
         light_vertex_input
     }
 
-    fn process_sprite_state(&mut self, game_render_desc: &GameRenderDesc) -> (Buffer, u32){
+    fn process_sprite_state(&mut self, game_render_desc: &GameRenderDesc) -> (Buffer, u32) {
         let mut sprites = Vec::with_capacity(4 * game_render_desc.sprites.len());
 
-        for &SpriteRenderDesc{ x, y, u, v, w, h } in game_render_desc.sprites.iter() {
+        for &SpriteRenderDesc { x, y, u, v, w, h } in game_render_desc.sprites.iter() {
             sprites.extend_from_slice(&[
                 SpriteVertexInput {
                     sprite_xy: [x, y],
@@ -821,7 +821,6 @@ impl<'a> GameRenderState<'a> {
                     sprite_xy: [x, y + h],
                     sprite_uv: [u, v + h],
                 },
-
             ]);
         }
 
@@ -835,7 +834,10 @@ impl<'a> GameRenderState<'a> {
         (sprite_vertex_input, sprites.len() as u32 / 4)
     }
 
-    fn process_tile_state(&mut self, game_render_desc: &GameRenderDesc) -> (Buffer, u32, Buffer, u32) {
+    fn process_tile_state(
+        &mut self,
+        game_render_desc: &GameRenderDesc,
+    ) -> (Buffer, u32, Buffer, u32) {
         // Calculate tile vertex data.
         let max_tiles = (game_render_desc.tiles_w - 2) * (game_render_desc.tiles_h - 2);
         let mut fg_vertex_tiles = Vec::with_capacity(4 * max_tiles);
@@ -851,8 +853,8 @@ impl<'a> GameRenderState<'a> {
 
                         // Fill FG.
                         'skip_fg: {
-                            let tile_texture_properties =
-                                tile_texture_properties_lookup[game_render_desc.fg_tiles[index].0 as usize];
+                            let tile_texture_properties = tile_texture_properties_lookup
+                                [game_render_desc.fg_tiles[index].0 as usize];
 
                             // Get texture UV.
                             let u = tile_texture_properties.u;
@@ -922,8 +924,8 @@ impl<'a> GameRenderState<'a> {
 
                         // Fill FG.
                         'skip_bg: {
-                            let tile_texture_properties =
-                                tile_texture_properties_lookup[game_render_desc.bg_tiles[index].0 as usize];
+                            let tile_texture_properties = tile_texture_properties_lookup
+                                [game_render_desc.bg_tiles[index].0 as usize];
 
                             // Get texture UV.
                             let u = tile_texture_properties.u;

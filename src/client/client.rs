@@ -1,4 +1,4 @@
-use crate::client::{GameRenderState, GameUpdateState, GameRenderDesc};
+use crate::client::{GameRenderDesc, GameRenderState, GameUpdateState};
 use crate::time::*;
 use crate::{InputEvent, Window};
 use std::path::Path;

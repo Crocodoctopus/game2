@@ -56,7 +56,7 @@ impl TileLightProperty {
         };
         map[Tile::DenseStone as usize] = Self {
             fade: FADE_DENSE,
-            light: (30, 20, 40),
+            light: (0, 0, 0),
         };
         map[Tile::RedTorch as usize] = Self {
             fade: FADE_MIN,
@@ -123,6 +123,7 @@ impl TilePhysicsProperty {
         let mut map = [Self { solid: true }; TILE_COUNT];
 
         // Fill.
+        map[Tile::None as usize] = Self { solid: false };
 
         return map;
     }
