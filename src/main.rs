@@ -1,12 +1,10 @@
 mod client;
 mod client_app;
-mod handle_map;
 mod server;
 mod shared;
 mod time;
 mod window;
 
-pub use handle_map::*;
 pub use shared::*;
 pub use time::{timestamp_as_msecs, timestamp_as_secs, timestamp_as_usecs};
 pub use window::*;

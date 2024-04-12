@@ -1,7 +1,5 @@
 @group(0) @binding(0)
 var<uniform> view: mat3x3<f32>;
-@group(0) @binding(1)
-var generic_sampler: sampler;
 
 @group(1) @binding(0)
 var light_tex: texture_2d<u32>;

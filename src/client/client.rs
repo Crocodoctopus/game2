@@ -1,4 +1,4 @@
-use crate::client::{GameRenderState, GameUpdateState};
+use crate::client::{GameRenderState, GameUpdateState, GameRenderDesc};
 use crate::time::*;
 use crate::{InputEvent, Window};
 use std::path::Path;
@@ -13,6 +13,7 @@ pub struct Client<'a> {
     update_state: GameUpdateState,
 
     // Render.
+    game_render_desc: Option<GameRenderDesc>,
     render_ts: u64,
     render_state: GameRenderState<'a>,
 
@@ -35,6 +36,7 @@ impl<'a> Client<'a> {
             update_ts: crate::timestamp_as_usecs(),
             update_state: GameUpdateState::new(root),
 
+            game_render_desc: None,
             render_ts: crate::timestamp_as_usecs(),
             render_state: GameRenderState::new(root, window),
 
@@ -49,8 +51,6 @@ impl<'a> Client<'a> {
 
     pub fn update_once(&mut self, window: &'a Window, input_events: Vec<InputEvent>) -> bool {
         let frametime = 16666_u64;
-
-        let mut game_frame = None;
 
         // Record inputs.
         self.input_events.extend(input_events.clone());
@@ -81,7 +81,7 @@ impl<'a> Client<'a> {
 
             // Poststep.
             let ts = timestamp_as_usecs();
-            game_frame = Some(self.update_state.poststep(self.update_ts));
+            self.game_render_desc = Some(self.update_state.poststep(self.update_ts));
             self.poststep_acc += timestamp_as_usecs() - ts;
 
             self.update_n += 1;
@@ -91,11 +91,9 @@ impl<'a> Client<'a> {
         {
             let ts = timestamp_as_usecs();
             self.render_state.handle_events(input_events.iter());
-            if let Some(game_frame) = game_frame {
-                self.render_state
-                    .process_game_frame(self.render_ts, game_frame);
+            if let Some(game_render_desc) = &self.game_render_desc {
+                self.render_state.render(self.render_ts, game_render_desc);
             }
-            self.render_state.render();
             self.render_ts += frametime;
             self.render_acc += timestamp_as_usecs() - ts;
             self.render_n += 1;

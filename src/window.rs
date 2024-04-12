@@ -95,7 +95,7 @@ impl EventLoop {
                             _ => return,
                         }
                     }
-                    
+
                     _ => return,
                 }
             });

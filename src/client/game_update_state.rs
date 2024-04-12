@@ -1,4 +1,4 @@
-use crate::client::GameFrame;
+use crate::client::{GameRenderDesc, TileRenderDesc, SpriteRenderDesc};
 use crate::shared::{Tile, TILE_LIGHT_PROPERTIES};
 use crate::InputEvent;
 use std::path::Path;
@@ -178,7 +178,7 @@ impl GameUpdateState {
 
     pub fn step(&mut self, ts: u64, ft: u64) {}
 
-    pub fn poststep(&mut self, ts: u64) -> GameFrame {
+    pub fn poststep(&mut self, ts: u64) -> GameRenderDesc {
         // Lighting
         let (light_x, light_y, light_w, light_h, r_channel, g_channel, b_channel) = {
             // Light lookup.
@@ -264,26 +264,35 @@ impl GameUpdateState {
             let y1 = (self.viewport_y - 4) / 16 - 1;
             let x2 = (self.viewport_x + self.viewport_w + 4 + 15) / 16 + 1;
             let y2 = (self.viewport_y + self.viewport_h + 4 + 15) / 16 + 1;
-            let mut fg_tiles = vec![Tile::None; (x2 - x1) * (y2 - y1)].into_boxed_slice();
-            let mut bg_tiles = vec![Tile::None; (x2 - x1) * (y2 - y1)].into_boxed_slice();
+            let mut fg_tiles = vec![TileRenderDesc(Tile::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
+            let mut bg_tiles = vec![TileRenderDesc(Tile::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
             let w = x2 - x1;
             let h = y2 - y1;
             for y in 0..h {
                 for x in 0..w {
                     let src_index = (x + x1) + (y + y1) * self.world_w;
                     let dst_index = x + y * w;
-                    fg_tiles[dst_index] = self.fg_tiles[src_index];
-                    bg_tiles[dst_index] = self.bg_tiles[src_index];
+                    fg_tiles[dst_index] = TileRenderDesc(self.fg_tiles[src_index]);
+                    bg_tiles[dst_index] = TileRenderDesc(self.bg_tiles[src_index]);
                 }
             }
             (x1, y1, x2 - x1, y2 - y1, fg_tiles, bg_tiles)
         };
 
-        GameFrame {
+        GameRenderDesc {
             viewport_x: self.viewport_x as f32,
             viewport_y: self.viewport_y as f32,
             viewport_w: self.viewport_w as f32,
             viewport_h: self.viewport_h as f32,
+
+            sprites: Box::new([ SpriteRenderDesc {
+                x: 64.,
+                y: 64.,
+                w: 64.,
+                h: 64.,
+                u: 0.,
+                v: 0.,
+            }]),
 
             light_x,
             light_y,
