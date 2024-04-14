@@ -1,7 +1,0 @@
-struct ClientNetManager {
-
-};
-
-struct ServerNetManager {
-
-};

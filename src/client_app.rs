@@ -29,29 +29,19 @@ impl<'a> ClientApp<'a> {
         let mut event_loop = EventLoop::new(event_loop);
         let window = Window::new(window);
 
+        let (input_send, input_recv) = crossbeam_channel::bounded(100);
+
         // Initialize server.
-        let (mut server, port) = Server::new(0);
+        let (mut server, port) = Server::new(root, 0);
 
         // Initialize client.
-        let mut client = Client::new(root, port, &window);
+        let mut client = Client::new(root, &window, port);
 
-        'end: loop {
-            // Update server.
-            server.update_once();
-
-            // Poll events.
-            let input_events = event_loop.poll();
-
-            // Update client.
-            let brk = client.update_once(&window, input_events);
-            if brk {
-                break;
-            }
-
-            // Swap.
-            window.swap();
-        }
-
-        std::process::exit(0);
+        // Start.
+        std::thread::scope(|s| {
+            let client_thread = s.spawn(|| client.run(input_recv));
+            let server_thread = s.spawn(|| server.run());
+            event_loop.run(|event| input_send.send(event).unwrap())
+        })
     }
 }

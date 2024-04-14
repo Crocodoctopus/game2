@@ -71,7 +71,7 @@ struct SpriteVertexInput {
 pub struct GameRenderState<'a> {
     // State.
     surface_config: SurfaceConfiguration,
-    surface: Surface<'a>,
+    pub surface: Surface<'a>,
     device: Device,
     queue: Queue,
 
@@ -635,7 +635,7 @@ impl<'a> GameRenderState<'a> {
         false
     }
 
-    pub fn render(&mut self, _ts: u64, game_render_desc: &GameRenderDesc) {
+    pub fn render(&mut self, output: SurfaceTexture, _ts: u64, game_render_desc: &GameRenderDesc) {
         // Whisked away to a far off place.
         self.process_view_matrix(&game_render_desc);
         let light_vertex_input = self.process_light_state(&game_render_desc);
@@ -644,7 +644,6 @@ impl<'a> GameRenderState<'a> {
         let (sprite_vertex_input, sprite_count) = self.process_sprite_state(&game_render_desc);
 
         // Begin rendering.
-        let output = self.surface.get_current_texture().unwrap();
         let view = output.texture.create_view(&<_>::default());
         let mut encoder = self.device.create_command_encoder(&<_>::default());
         let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {

@@ -1,5 +1,6 @@
 mod client;
 mod client_app;
+mod net;
 mod server;
 mod shared;
 mod time;

@@ -1,11 +1,12 @@
 use crate::shared::*;
+use bitcode::{Decode, Encode};
 use lazy_static::lazy_static;
 
 pub const TILE_SIZE: usize = 16;
 pub const TILE_BORDER_SIZE: usize = 4;
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub enum Tile {
     None = 0,
     Dirt,

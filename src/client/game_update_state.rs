@@ -1,4 +1,5 @@
 use crate::client::{GameRenderDesc, SpriteRenderDesc, TileRenderDesc};
+use crate::net::{ClientNetSender, NetEvent, NetEventKind};
 use crate::shared::*;
 use crate::shared::{Tile, TILE_LIGHT_PROPERTIES, TILE_SIZE};
 use crate::InputEvent;
@@ -37,44 +38,13 @@ pub struct GameUpdateState {
 }
 
 impl GameUpdateState {
-    pub fn new(root: &'static Path) -> Self {
-        let world_w = 8400;
-        let world_h = 2400;
-        let mut fg_tiles = vec![Tile::None; world_w * world_h].into_boxed_slice();
-        let mut bg_tiles = vec![Tile::None; world_w * world_h].into_boxed_slice();
-        for y in 0..world_h {
-            for x in 0..world_w {
-                let index = x + y * world_w;
-
-                if y == 0 || y == world_h - 1 || x == 0 || x == world_w - 1 {
-                    fg_tiles[index] = Tile::Dirt;
-                    bg_tiles[index] = Tile::Dirt;
-                    continue;
-                }
-
-                if y < 20 {
-                    fg_tiles[index] = Tile::None;
-                    bg_tiles[index] = Tile::None;
-                    continue;
-                }
-
-                if y < 25 {
-                    fg_tiles[index] = Tile::Dirt;
-                    bg_tiles[index] = Tile::Dirt;
-                    continue;
-                }
-
-                if y < 45 {
-                    fg_tiles[index] = Tile::Stone;
-                    bg_tiles[index] = Tile::Stone;
-                    continue;
-                }
-
-                fg_tiles[index] = Tile::DenseStone;
-                bg_tiles[index] = Tile::DenseStone;
-            }
-        }
-
+    pub fn new(
+        root: &'static Path,
+        world_w: usize,
+        world_h: usize,
+        fg_tiles: Box<[Tile]>,
+        bg_tiles: Box<[Tile]>,
+    ) -> Self {
         // Temp.
         let humanoids = vec![Humanoid {
             x: 64.,
@@ -120,79 +90,22 @@ impl GameUpdateState {
     pub fn prestep<'a>(
         &mut self,
         ts: u64,
-        input_events: impl Iterator<Item = &'a InputEvent>,
+        input_events: impl Iterator<Item = InputEvent>,
+        net_events: impl Iterator<Item = NetEvent>,
     ) -> bool {
+        // Shift all input queues.
         let shift = |queue: &mut _| *queue = *queue << 1 | *queue & 1;
         shift(&mut self.right_queue);
         shift(&mut self.left_queue);
         shift(&mut self.jump_queue);
 
-        for &e in input_events {
-            use crate::window::*;
-            match e {
-                InputEvent::WindowClose => return true,
-                InputEvent::WindowResize { width, height } => {
-                    self.window_width = width as usize;
-                    self.window_height = height as usize;
-                }
-                InputEvent::KeyboardInput {
-                    keycode,
-                    press_state,
-                } => {
-                    let bit = match press_state {
-                        PressState::Up => 0,
-                        PressState::Down => 1,
-                        PressState::DownRepeat => 1,
-                    };
-                    match keycode {
-                        'd' | 'D' => self.right_queue = self.right_queue & !1 | bit,
-                        'a' | 'A' => self.left_queue = self.left_queue & !1 | bit,
-                        ' ' => self.jump_queue = self.jump_queue & !1 | bit,
-                        '1' if bit == 0 => {
-                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
-                            self.fg_tiles[index] = Tile::RedTorch;
-                        }
-                        '2' if bit == 0 => {
-                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
-                            self.fg_tiles[index] = Tile::GreenTorch;
-                        }
-                        '3' if bit == 0 => {
-                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
-                            self.fg_tiles[index] = Tile::BlueTorch;
-                        }
-                        _ => {}
-                    };
-                }
+        // Process input events.
+        let exit = self.handle_input_events(ts, input_events);
 
-                InputEvent::MouseMove { x, y } => {
-                    let (x, y) = (x / self.window_width as f32, y / self.window_height as f32);
-                    self.mouse_x_rel = (x * self.viewport_w as f32) as usize;
-                    self.mouse_y_rel = (y * self.viewport_h as f32) as usize;
-                    self.mouse_x = self.viewport_x + self.mouse_x_rel;
-                    self.mouse_y = self.viewport_y + self.mouse_y_rel;
-                }
+        // Process net events.
+        self.handle_net_events(ts, net_events);
 
-                InputEvent::MouseClick {
-                    mouse_button,
-                    press_state,
-                } => {
-                    println!("{mouse_button:?}, {press_state:?}");
-                    match (mouse_button, press_state) {
-                        (MouseButton::Left | MouseButton::Right, PressState::Down) => {
-                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
-                            match mouse_button {
-                                MouseButton::Left => self.fg_tiles[index] = Tile::None,
-                                MouseButton::Right => self.bg_tiles[index] = Tile::None,
-                                _ => unreachable!(),
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        false
+        return exit;
     }
 
     pub fn step(&mut self, ts: u64, ft: u64) {
@@ -200,7 +113,7 @@ impl GameUpdateState {
 
         // Update time.
         let day_cycle = 60.;
-        self.time += ft / day_cycle;
+        //self.time += ft / day_cycle;
         if self.time > 1. {
             self.time = 0.;
         }
@@ -259,7 +172,7 @@ impl GameUpdateState {
         self.viewport_y = std::cmp::max(2 * TILE_SIZE, self.viewport_y);
     }
 
-    pub fn poststep(&mut self, ts: u64) -> GameRenderDesc {
+    pub fn poststep(&mut self, ts: u64, sender: &mut impl ClientNetSender) -> GameRenderDesc {
         // Lighting.
         let (light_x, light_y, light_w, light_h, r_channel, g_channel, b_channel) = {
             // Calculate sky light value.
@@ -414,5 +327,89 @@ impl GameUpdateState {
             fg_tiles,
             bg_tiles,
         }
+    }
+
+    fn handle_net_events(&mut self, ts: u64, net_events: impl Iterator<Item = NetEvent>) {
+        for e in net_events {
+            match e.kind {
+                NetEventKind::Data(bytes) => {
+                    let msgs: Box<[ServerNetMessage]> = deserialize(bytes);
+                }
+                _ => println!("{e:?}"),
+            }
+        }
+    }
+
+    fn handle_input_events(
+        &mut self,
+        ts: u64,
+        input_events: impl Iterator<Item = InputEvent>,
+    ) -> bool {
+        for e in input_events {
+            use crate::window::*;
+            match e {
+                InputEvent::WindowClose => return true,
+                InputEvent::WindowResize { width, height } => {
+                    self.window_width = width as usize;
+                    self.window_height = height as usize;
+                }
+                InputEvent::KeyboardInput {
+                    keycode,
+                    press_state,
+                } => {
+                    let bit = match press_state {
+                        PressState::Up => 0,
+                        PressState::Down => 1,
+                        PressState::DownRepeat => 1,
+                    };
+                    match keycode {
+                        'd' | 'D' => self.right_queue = self.right_queue & !1 | bit,
+                        'a' | 'A' => self.left_queue = self.left_queue & !1 | bit,
+                        ' ' => self.jump_queue = self.jump_queue & !1 | bit,
+                        '1' if bit == 0 => {
+                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
+                            self.fg_tiles[index] = Tile::RedTorch;
+                        }
+                        '2' if bit == 0 => {
+                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
+                            self.fg_tiles[index] = Tile::GreenTorch;
+                        }
+                        '3' if bit == 0 => {
+                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
+                            self.fg_tiles[index] = Tile::BlueTorch;
+                        }
+                        _ => {}
+                    };
+                }
+
+                InputEvent::MouseMove { x, y } => {
+                    let (x, y) = (x / self.window_width as f32, y / self.window_height as f32);
+                    self.mouse_x_rel = (x * self.viewport_w as f32) as usize;
+                    self.mouse_y_rel = (y * self.viewport_h as f32) as usize;
+                    self.mouse_x = self.viewport_x + self.mouse_x_rel;
+                    self.mouse_y = self.viewport_y + self.mouse_y_rel;
+                }
+
+                InputEvent::MouseClick {
+                    mouse_button,
+                    press_state,
+                } => {
+                    println!("{mouse_button:?}, {press_state:?}");
+                    match (mouse_button, press_state) {
+                        (MouseButton::Left | MouseButton::Right, PressState::Down) => {
+                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
+                            match mouse_button {
+                                MouseButton::Left => self.fg_tiles[index] = Tile::None,
+                                MouseButton::Right => self.bg_tiles[index] = Tile::None,
+                                _ => unreachable!(),
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        false
     }
 }
