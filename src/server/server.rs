@@ -39,8 +39,12 @@ impl Server {
         //
         loop {
             // Skip if enough time has passed.
-            let next_timestamp = crate::time::wait(self.update_ts + frametime, 2_000);
-            assert!(next_timestamp - self.update_ts >= frametime, "{} {frametime}", next_timestamp - self.update_ts);
+            let next_timestamp = crate::time::wait(self.update_ts + frametime, 1_000);
+            assert!(
+                next_timestamp - self.update_ts >= frametime,
+                "{} {frametime}",
+                next_timestamp - self.update_ts
+            );
 
             // Prestep.
             let ts = timestamp_as_usecs();
@@ -55,6 +59,7 @@ impl Server {
                 while self.update_ts + frametime <= next_timestamp {
                     self.update_state.step(self.update_ts, frametime);
                     self.update_ts += frametime;
+                    self.update_n += 1;
                 }
             }
             self.step_acc += timestamp_as_usecs() - ts;
@@ -67,8 +72,7 @@ impl Server {
             self.poststep_acc += timestamp_as_usecs() - ts;
 
             // Time printing.
-            self.update_n += 1;
-            if self.update_n > 60 * 5 {
+            if self.update_n > 60 * 30 {
                 println!(
                     "[Server] Update total: {:.2}ms.\n  Prestep: {:.2}ms.\n  Step: {:.2}ms.\n  Poststep: {:.2}ms.",
                     ((self.prestep_acc + self.step_acc + self.poststep_acc)

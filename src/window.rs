@@ -26,6 +26,11 @@ fn map_events(event: winit::event::Event<()>) -> Option<InputEvent> {
             match event {
                 // Keyboard input event.
                 winit::event::WindowEvent::KeyboardInput { event, .. } => {
+                    // Filter repeats.
+                    if event.repeat == true {
+                        return None;
+                    }
+
                     let keycode = match &event.text {
                         Some(c) => c.as_str().chars().next().unwrap(),
                         _ => return None,
@@ -98,13 +103,25 @@ impl EventLoop {
     }
 
     pub fn run(self, mut f: impl FnMut(InputEvent)) -> ! {
+        // We have to do our own sleeping.
+        self.event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+        
+        // Never ending loop.
         self.event_loop
             .run(move |event, _| {
+                // If we're out of events, sleep for 16ms and try agian. 
+                if let winit::event::Event::AboutToWait = event {
+                    std::thread::sleep_ms(5);
+                    return;
+                }
+
+                // Map winit event to native event.
                 if let Some(event) = map_events(event) {
                     f(event);
                 }
             })
             .unwrap();
+        
         std::process::exit(-1);
     }
 

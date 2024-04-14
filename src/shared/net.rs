@@ -20,6 +20,8 @@ pub enum ServerNetMessage {
     WorldInfo {
         width: u16,
         height: u16,
+        spawn_x: u16,
+        spawn_y: u16,
     },
 
     ChunkSync {

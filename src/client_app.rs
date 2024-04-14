@@ -41,7 +41,10 @@ impl<'a> ClientApp<'a> {
         std::thread::scope(|s| {
             let client_thread = s.spawn(|| client.run(input_recv));
             let server_thread = s.spawn(|| server.run());
-            event_loop.run(|event| input_send.send(event).unwrap())
+            event_loop.run(|event| {
+                println!("{event:?}");
+                input_send.send(event).unwrap();
+            });
         })
     }
 }

@@ -63,77 +63,25 @@ impl<'a> Client<'a> {
         let server_dst = ("127.0.0.1", self.server_port);
         let mut net_manager = ClientNetManager::new(server_dst);
 
-        // Connect/Join sequence.
-        let (width, height, fg_tiles, bg_tiles) = 'start: {
-            use crate::net::ClientNetSender;
-            println!("[Client] Starting join sequence for {server_dst:?}.");
-
+        // Connect/wait.
+        'start: {
             // Send reliable Connect.
             net_manager.send_ru(serialize(&[ClientNetMessage::Connect { version: (0, 0) }]));
 
-            // Output data.
-            let mut world_w = 0;
-            let mut world_h = 0;
-            let mut fg_tiles = vec![]; //vec![Tile::None; world_w * world_h];
-            let mut bg_tiles = vec![]; //vec![Tile::None; world_w * world_h];
-
             // Begin state sync.
-            println!("[Client] Begin world construction sequence.");
             loop {
                 // Wait for a net event.
                 net_manager.poll();
-                let net_events: Vec<NetEvent> = net_manager.recv().collect();
-                for net_event in net_events {
-                    match net_event {
+                for net_event in net_manager.recv() {
+                    match net_event.kind {
                         // Data net events.
-                        NetEvent {
-                            source: _,
-                            kind: NetEventKind::Data(bytes),
-                        } => {
+                        NetEventKind::Data(bytes) => {
                             // Deserialize message.
                             for net_event in deserialize(bytes).into_vec() {
                                 match net_event {
-                                    // First message expected.
+                                    // On ConnectAccept, allow client to do client things.
                                     ServerNetMessage::ConnectAccept => {
-                                        net_manager.send_ru(serialize(&[ClientNetMessage::Join]));
-                                    }
-
-                                    // Second message expected.
-                                    ServerNetMessage::WorldInfo { width, height } => {
-                                        world_w = width as usize;
-                                        world_h = height as usize;
-                                        fg_tiles = vec![Tile::None; world_w * world_h];
-                                        bg_tiles = vec![Tile::None; world_w * world_h];
-                                    }
-
-                                    // Lots of these are expected.
-                                    ServerNetMessage::ChunkSync {
-                                        x: inner_x,
-                                        y: inner_y,
-                                        seq: _,
-                                        fg_tiles: inner_fg_tiles,
-                                        bg_tiles: inner_bg_tiles,
-                                    } => {
-                                        let inner_x = inner_x as usize;
-                                        let inner_y = inner_y as usize;
-                                        for y in 0..CHUNK_SIZE {
-                                            for x in 0..CHUNK_SIZE {
-                                                fg_tiles[(inner_x + x) + (inner_y + y) * world_w] =
-                                                    inner_fg_tiles[x + y * CHUNK_SIZE];
-                                                bg_tiles[(inner_x + x) + (inner_y + y) * world_w] =
-                                                    inner_bg_tiles[x + y * CHUNK_SIZE];
-                                            }
-                                        }
-                                    }
-
-                                    // Final message, escape the loop.
-                                    ServerNetMessage::Start => {
-                                        break 'start (
-                                            world_w,
-                                            world_h,
-                                            fg_tiles.into_boxed_slice(),
-                                            bg_tiles.into_boxed_slice(),
-                                        );
+                                        break 'start;
                                     }
 
                                     _ => println!(
@@ -144,12 +92,7 @@ impl<'a> Client<'a> {
                         }
 
                         // Server booted us, probably for taking too long.
-                        NetEvent {
-                            source: _,
-                            kind: NetEventKind::Disconnect,
-                        } => {
-                            panic!();
-                        }
+                        NetEventKind::Disconnect => panic!(),
 
                         // Connect message, probably ignore it?
                         _ => {}
@@ -159,9 +102,7 @@ impl<'a> Client<'a> {
         };
 
         self.update_ts = crate::timestamp_as_usecs();
-        self.update_state = Some(GameUpdateState::new(
-            self.root, width, height, fg_tiles, bg_tiles,
-        ));
+        self.update_state = Some(GameUpdateState::new(self.root, net_manager));
 
         loop {
             // Record inputs.
@@ -171,7 +112,7 @@ impl<'a> Client<'a> {
             // Run update "thread" if enough time has passed.
             let next_timestamp = crate::timestamp_as_usecs();
             if next_timestamp - self.update_ts >= frametime {
-                let update_state = match &mut self.update_state {
+                let update_state: &mut GameUpdateState = match self.update_state.as_mut() {
                     Some(update_state) => update_state,
                     None => panic!(),
                 };
@@ -179,15 +120,11 @@ impl<'a> Client<'a> {
                 // Prestep.
                 let ts = timestamp_as_usecs();
                 {
-                    // Extract net events.
-                    net_manager.poll();
-                    let net_events = net_manager.recv();
-
                     // Extract input events.
                     let input_events = std::mem::take(&mut self.input_events).into_iter();
 
                     // Prestep.
-                    if update_state.prestep(self.update_ts, input_events, net_events) {
+                    if update_state.prestep(self.update_ts, input_events) {
                         break;
                     }
                 }
@@ -204,12 +141,11 @@ impl<'a> Client<'a> {
 
                 // Poststep.
                 let ts = timestamp_as_usecs();
-                self.game_render_desc =
-                    Some(update_state.poststep(self.update_ts, &mut net_manager));
+                self.game_render_desc = Some(update_state.poststep(self.update_ts));
                 self.poststep_acc += timestamp_as_usecs() - ts;
 
                 // Time printing.
-                if self.update_n > 60 * 5 {
+                if self.update_n > 60 * 30 {
                     println!(
                     "[Client] Update total: {:.2}ms.\n  Prestep: {:.2}ms.\n  Step: {:.2}ms.\n  Poststep: {:.2}ms.",
                     ((self.prestep_acc + self.step_acc + self.poststep_acc)
@@ -243,7 +179,7 @@ impl<'a> Client<'a> {
                 self.render_acc += timestamp_as_usecs() - ts0 - ts1;
 
                 // Time printing.
-                if self.render_n > 60 * 5 {
+                if self.render_n > 60 * 30 {
                     println!(
                         "[Client] Render total: {:.2}ms.",
                         (self.render_acc / self.render_n) as f32 * 0.001

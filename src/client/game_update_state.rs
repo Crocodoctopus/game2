@@ -1,11 +1,14 @@
 use crate::client::{GameRenderDesc, SpriteRenderDesc, TileRenderDesc};
-use crate::net::{ClientNetSender, NetEvent, NetEventKind};
+use crate::net::{ClientNetManager, NetEvent, NetEventKind};
 use crate::shared::*;
 use crate::shared::{Tile, TILE_LIGHT_PROPERTIES, TILE_SIZE};
 use crate::InputEvent;
 use std::path::Path;
 
 pub struct GameUpdateState {
+    // Net manager.
+    net_manager: ClientNetManager,
+
     //Input.
     window_width: usize,
     window_height: usize,
@@ -38,23 +41,96 @@ pub struct GameUpdateState {
 }
 
 impl GameUpdateState {
-    pub fn new(
-        root: &'static Path,
-        world_w: usize,
-        world_h: usize,
-        fg_tiles: Box<[Tile]>,
-        bg_tiles: Box<[Tile]>,
-    ) -> Self {
+    pub fn new(root: &'static Path, mut net_manager: ClientNetManager) -> Self {
+        let viewport_x = 32;
+        let viewport_y = 32;
+        let viewport_w = 1280;
+        let viewport_h = 720;
+
+        let mut spawn_x = 0;
+        let mut spawn_y = 0;
+
+        let mut world_w = 0;
+        let mut world_h = 0;
+        let mut fg_tiles: Box<[Tile]> = Box::new([]);
+        let mut bg_tiles: Box<[Tile]> = Box::new([]);
+
+        // Start join sequence.
+        {
+            // Initial join sequence.
+            net_manager.send_ru(serialize(&[ClientNetMessage::Join]));
+            net_manager.poll();
+
+            'start: loop {
+                // Get net messages.
+                net_manager.poll();
+
+                // Get all events.
+                for net_event in net_manager.recv() {
+                    match net_event.kind {
+                        // Data net event.
+                        NetEventKind::Data(bytes) => {
+                            for msg in deserialize(bytes).to_vec() {
+                                match msg {
+                                    ServerNetMessage::WorldInfo { width, height, spawn_x: inner_spawn_x, spawn_y: inner_spawn_y } => {
+                                        // Init world.
+                                        spawn_x = inner_spawn_x as usize;
+                                        spawn_y = inner_spawn_y as usize;
+                                        world_w = width as usize;
+                                        world_h = height as usize;
+                                        fg_tiles =
+                                            vec![Tile::None; world_w * world_h].into_boxed_slice();
+                                        bg_tiles =
+                                            vec![Tile::None; world_w * world_h].into_boxed_slice();
+                                    }
+
+                                    ServerNetMessage::ChunkSync {
+                                        x,
+                                        y,
+                                        seq,
+                                        fg_tiles: inner_fg_tiles,
+                                        bg_tiles: inner_bg_tiles,
+                                    } => {
+                                        let cx = x as usize;
+                                        let cy = y as usize;
+                                        for y in 0..CHUNK_SIZE {
+                                            for x in 0..CHUNK_SIZE {
+                                                let src_index = x + y * CHUNK_SIZE;
+                                                let dst_index = x
+                                                    + cx * CHUNK_SIZE
+                                                    + (y + cy * CHUNK_SIZE) * world_w;
+                                                fg_tiles[dst_index] = inner_fg_tiles[src_index];
+                                                bg_tiles[dst_index] = inner_bg_tiles[src_index];
+                                            }
+                                        }
+                                    }
+
+                                    ServerNetMessage::Start => break 'start,
+
+                                    _ => panic!(),
+                                }
+                            }
+                        }
+
+                        _ => {}
+                    }
+                }
+            }
+        }
+        
         // Temp.
         let humanoids = vec![Humanoid {
-            x: 64.,
-            y: 64.,
+            x: (spawn_x * TILE_SIZE) as f32,
+            y: (spawn_y * TILE_SIZE) as f32,
             w: 16.,
             h: 24.,
             ..Default::default()
         }];
 
         Self {
+            // Net manager.
+            net_manager,
+
             // Input.
             window_width: 0,
             window_height: 0,
@@ -68,10 +144,10 @@ impl GameUpdateState {
             jump_queue: 0,
 
             // Viewport.
-            viewport_x: 32,
-            viewport_y: 32,
-            viewport_w: 1280,
-            viewport_h: 720,
+            viewport_x,
+            viewport_y,
+            viewport_w,
+            viewport_h,
 
             // World.
             time: 0.,
@@ -87,12 +163,7 @@ impl GameUpdateState {
         }
     }
 
-    pub fn prestep<'a>(
-        &mut self,
-        ts: u64,
-        input_events: impl Iterator<Item = InputEvent>,
-        net_events: impl Iterator<Item = NetEvent>,
-    ) -> bool {
+    pub fn prestep<'a>(&mut self, ts: u64, input_events: impl Iterator<Item = InputEvent>) -> bool {
         // Shift all input queues.
         let shift = |queue: &mut _| *queue = *queue << 1 | *queue & 1;
         shift(&mut self.right_queue);
@@ -103,7 +174,8 @@ impl GameUpdateState {
         let exit = self.handle_input_events(ts, input_events);
 
         // Process net events.
-        self.handle_net_events(ts, net_events);
+        self.net_manager.poll();
+        self.handle_net_events(ts);
 
         return exit;
     }
@@ -172,7 +244,7 @@ impl GameUpdateState {
         self.viewport_y = std::cmp::max(2 * TILE_SIZE, self.viewport_y);
     }
 
-    pub fn poststep(&mut self, ts: u64, sender: &mut impl ClientNetSender) -> GameRenderDesc {
+    pub fn poststep(&mut self, ts: u64) -> GameRenderDesc {
         // Lighting.
         let (light_x, light_y, light_w, light_h, r_channel, g_channel, b_channel) = {
             // Calculate sky light value.
@@ -329,8 +401,8 @@ impl GameUpdateState {
         }
     }
 
-    fn handle_net_events(&mut self, ts: u64, net_events: impl Iterator<Item = NetEvent>) {
-        for e in net_events {
+    fn handle_net_events(&mut self, ts: u64) {
+        for e in self.net_manager.recv() {
             match e.kind {
                 NetEventKind::Data(bytes) => {
                     let msgs: Box<[ServerNetMessage]> = deserialize(bytes);
@@ -394,7 +466,6 @@ impl GameUpdateState {
                     mouse_button,
                     press_state,
                 } => {
-                    println!("{mouse_button:?}, {press_state:?}");
                     match (mouse_button, press_state) {
                         (MouseButton::Left | MouseButton::Right, PressState::Down) => {
                             let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;

@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 
 pub struct GameUpdateState {
+    // Net manager.
     net_manager: ServerNetManager,
 
     // Tiles.
@@ -31,19 +32,19 @@ impl GameUpdateState {
                     continue;
                 }
 
-                if y < 20 {
+                if y < 102 {
                     fg_tiles[index] = Tile::None;
                     bg_tiles[index] = Tile::None;
                     continue;
                 }
 
-                if y < 25 {
+                if y < 102 + 5 {
                     fg_tiles[index] = Tile::Dirt;
                     bg_tiles[index] = Tile::Dirt;
                     continue;
                 }
 
-                if y < 45 {
+                if y < 102 + 15 {
                     fg_tiles[index] = Tile::Stone;
                     bg_tiles[index] = Tile::Stone;
                     continue;
@@ -79,8 +80,7 @@ impl GameUpdateState {
     }
 
     fn handle_net_events(&mut self, _ts: u64) {
-        let tmp: Vec<NetEvent> = self.net_manager.recv().collect();
-        for e in tmp {
+        for e in self.net_manager.recv() {
             match e.kind {
                 NetEventKind::Data(bytes) => {
                     let msgs: Vec<ClientNetMessage> = deserialize(bytes).into_vec();
@@ -97,51 +97,91 @@ impl GameUpdateState {
                             }
 
                             ClientNetMessage::RequestChunk { x, y, seq } => {
-                                /*
-                                let mut fg_tiles = Vec::with_capacity(CHUNK_AREA);
-                                let mut bg_tiles = Vec::with_capacity(CHUNK_AREA);
+                                // TODO seq
+                                let inner_x = x as usize;
+                                let inner_y = y as usize;
+                                let mut fg_tiles = [Tile::None; CHUNK_AREA];
+                                let mut bg_tiles = [Tile::None; CHUNK_AREA];
+                                for y in 0..CHUNK_SIZE {
+                                    for x in 0..CHUNK_SIZE {
+                                        fg_tiles[x + y * CHUNK_SIZE] = self.fg_tiles
+                                            [(inner_x + x) + (inner_y + y) * self.world_w];
+                                        bg_tiles[x + y * CHUNK_SIZE] = self.bg_tiles
+                                            [(inner_x + x) + (inner_y + y) * self.world_w];
+                                    }
+                                }
+
                                 self.net_manager.send_ru(
                                     e.source,
                                     serialize(&[ServerNetMessage::ChunkSync {
                                         x,
                                         y,
-
-                                    }]);
+                                        seq: seq + 1,
+                                        fg_tiles,
+                                        bg_tiles,
+                                    }]),
                                 );
-                                */
                             }
 
                             ClientNetMessage::Join => {
-                                self.net_manager.send_ro(
-                                    e.source,
-                                    serialize(&[ServerNetMessage::WorldInfo {
-                                        width: self.world_w as u16,
-                                        height: self.world_h as u16,
-                                    }]),
-                                );
-                                self.net_manager.send_ro(
-                                    e.source,
-                                    serialize(&[ServerNetMessage::ChunkSync {
-                                        x: 0,
-                                        y: 0,
-                                        seq: 0,
-                                        fg_tiles: [Tile::Dirt; CHUNK_AREA],
-                                        bg_tiles: [Tile::Dirt; CHUNK_AREA],
-                                    }]),
-                                );
+                                let mut msgs = Vec::new();
 
-                                self.net_manager
-                                    .send_ro(e.source, serialize(&[ServerNetMessage::Start]));
-                                /*
-                                     * let tmp = serialize(&[ServerNetMessage::WorldStateSync {
-                                        width: self.world_w as u16,
-                                        height: self.world_h as u16,
-                                        fg_tiles: self.fg_tiles.clone(),
-                                        bg_tiles: self.bg_tiles.clone(),
-                                    }]);
-                                    println!("{}", tmp.len());
-                                    self.net_manager.send_ru(e.source, tmp);
-                                */
+                                msgs.push(ServerNetMessage::WorldInfo {
+                                    width: self.world_w as u16,
+                                    height: self.world_h as u16,
+                                    spawn_x: 100,
+                                    spawn_y: 100,
+                                });
+
+                                // Arbitrary spawn point.
+                                let spawn_x = 100 * TILE_SIZE;
+                                let spawn_y = 100 * TILE_SIZE;
+                                let viewport_w = 1920;
+                                let viewport_h = 1080;
+
+                                // Calculate load area.
+                                const TILE_CHUNK_SIZE: usize = TILE_SIZE * CHUNK_SIZE;
+                                let x1 = (spawn_x - viewport_w / 2) / TILE_CHUNK_SIZE;
+                                let x2 = (spawn_x + viewport_w / 2 + TILE_CHUNK_SIZE - 1) / TILE_CHUNK_SIZE;
+                                let y1 = (spawn_y - viewport_h / 2) / TILE_CHUNK_SIZE;
+                                let y2 = (spawn_y + viewport_h / 2 + TILE_CHUNK_SIZE - 1) / TILE_CHUNK_SIZE;
+                                //assert_eq!(x2 - x1, CHUNK_LOAD_WIDTH);
+                                //assert_eq!(y2 - y1, CHUNK_LOAD_HEIGHT);
+
+                                // Send chunk data.
+                                println!("{}..{} {}..{}", x1, x2, y1, y2);
+                                for cy in y1..y2 {
+                                    for cx in x1..x2 {
+                                        let mut fg_tiles = [Tile::None; CHUNK_AREA];
+                                        let mut bg_tiles = [Tile::None; CHUNK_AREA];
+                                        for y in 0..CHUNK_SIZE {
+                                            for x in 0..CHUNK_SIZE {
+                                                let src_index = x
+                                                    + cx * CHUNK_SIZE
+                                                    + (y + cy * CHUNK_SIZE) * self.world_w;
+                                                let dst_index = x + y * CHUNK_SIZE;
+                                                fg_tiles[dst_index] = self.fg_tiles[src_index];
+                                                bg_tiles[dst_index] = self.bg_tiles[src_index];
+                                            }
+                                        }
+
+                                        msgs.push(ServerNetMessage::ChunkSync {
+                                            x: cx as u16,
+                                            y: cy as u16,
+                                            seq: 1,
+                                            fg_tiles,
+                                            bg_tiles,
+                                        });
+                                    }
+                                }
+
+                                // Send end.
+                                msgs.push(ServerNetMessage::Start);
+
+                                let se = serialize(&msgs);
+                                println!("[Server] Initial sync with size {}.", se.len());
+
+                                self.net_manager.send_ru(e.source, se);
                             }
                         }
                     }

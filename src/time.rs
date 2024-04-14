@@ -1,6 +1,6 @@
 use lazy_static::lazy_static;
 
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
 lazy_static! {
     // Timestamp since the start of the program.
