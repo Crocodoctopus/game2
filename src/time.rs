@@ -20,7 +20,7 @@ pub fn timestamp_as_secs() -> u64 {
 }
 
 pub fn wait(time: u64, buffer: u64) -> u64 {
-    if (time < timestamp_as_usecs()) {
+    if time < timestamp_as_usecs() {
         return timestamp_as_usecs();
     }
 

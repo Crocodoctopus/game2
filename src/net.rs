@@ -1,6 +1,6 @@
 use crossbeam_channel::{Receiver, Sender};
 use laminar::*;
-use std::collections::HashSet;
+
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Instant;
 

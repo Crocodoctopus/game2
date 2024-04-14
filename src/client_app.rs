@@ -26,25 +26,22 @@ impl<'a> ClientApp<'a> {
             .unwrap();
 
         // Wrappers.
-        let mut event_loop = EventLoop::new(event_loop);
+        let event_loop = EventLoop::new(event_loop);
         let window = Window::new(window);
 
         let (input_send, input_recv) = crossbeam_channel::bounded(100);
 
         // Initialize server.
-        let (mut server, port) = Server::new(root, 0);
+        let (server, port) = Server::new(root, 0);
 
         // Initialize client.
-        let mut client = Client::new(root, &window, port);
+        let client = Client::new(root, &window, port);
 
         // Start.
         std::thread::scope(|s| {
-            let client_thread = s.spawn(|| client.run(input_recv));
-            let server_thread = s.spawn(|| server.run());
-            event_loop.run(|event| {
-                println!("{event:?}");
-                input_send.send(event).unwrap();
-            });
+            let _client_thread = s.spawn(|| client.run(input_recv));
+            let _server_thread = s.spawn(|| server.run());
+            event_loop.run(|event| input_send.send(event).unwrap());
         })
     }
 }

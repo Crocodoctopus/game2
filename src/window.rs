@@ -104,12 +104,13 @@ impl EventLoop {
 
     pub fn run(self, mut f: impl FnMut(InputEvent)) -> ! {
         // We have to do our own sleeping.
-        self.event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-        
+        self.event_loop
+            .set_control_flow(winit::event_loop::ControlFlow::Poll);
+
         // Never ending loop.
         self.event_loop
             .run(move |event, _| {
-                // If we're out of events, sleep for 16ms and try agian. 
+                // If we're out of events, sleep for 16ms and try agian.
                 if let winit::event::Event::AboutToWait = event {
                     std::thread::sleep_ms(5);
                     return;
@@ -121,14 +122,14 @@ impl EventLoop {
                 }
             })
             .unwrap();
-        
+
         std::process::exit(-1);
     }
 
     pub fn poll(&mut self) -> Vec<InputEvent> {
         let mut input_events = Vec::new();
         use winit::platform::pump_events::EventLoopExtPumpEvents;
-        let status = self
+        let _status = self
             .event_loop
             .pump_events(Some(std::time::Duration::ZERO), |event, _| {
                 if let Some(event) = map_events(event) {

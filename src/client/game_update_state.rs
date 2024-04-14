@@ -1,5 +1,5 @@
-use crate::client::{GameRenderDesc, SpriteRenderDesc, TileRenderDesc};
-use crate::net::{ClientNetManager, NetEvent, NetEventKind};
+use crate::client::{log, GameRenderDesc, SpriteRenderDesc, TileRenderDesc};
+use crate::net::{ClientNetManager, NetEventKind};
 use crate::shared::*;
 use crate::shared::{Tile, TILE_LIGHT_PROPERTIES, TILE_SIZE};
 use crate::InputEvent;
@@ -41,7 +41,7 @@ pub struct GameUpdateState {
 }
 
 impl GameUpdateState {
-    pub fn new(root: &'static Path, mut net_manager: ClientNetManager) -> Self {
+    pub fn new(_root: &'static Path, mut net_manager: ClientNetManager) -> Self {
         let viewport_x = 32;
         let viewport_y = 32;
         let viewport_w = 1280;
@@ -72,7 +72,12 @@ impl GameUpdateState {
                         NetEventKind::Data(bytes) => {
                             for msg in deserialize(bytes).to_vec() {
                                 match msg {
-                                    ServerNetMessage::WorldInfo { width, height, spawn_x: inner_spawn_x, spawn_y: inner_spawn_y } => {
+                                    ServerNetMessage::WorldInfo {
+                                        width,
+                                        height,
+                                        spawn_x: inner_spawn_x,
+                                        spawn_y: inner_spawn_y,
+                                    } => {
                                         // Init world.
                                         spawn_x = inner_spawn_x as usize;
                                         spawn_y = inner_spawn_y as usize;
@@ -87,7 +92,7 @@ impl GameUpdateState {
                                     ServerNetMessage::ChunkSync {
                                         x,
                                         y,
-                                        seq,
+                                        seq: _,
                                         fg_tiles: inner_fg_tiles,
                                         bg_tiles: inner_bg_tiles,
                                     } => {
@@ -117,7 +122,7 @@ impl GameUpdateState {
                 }
             }
         }
-        
+
         // Temp.
         let humanoids = vec![Humanoid {
             x: (spawn_x * TILE_SIZE) as f32,
@@ -180,11 +185,11 @@ impl GameUpdateState {
         return exit;
     }
 
-    pub fn step(&mut self, ts: u64, ft: u64) {
+    pub fn step(&mut self, _ts: u64, ft: u64) {
         let ft = ft as f32 / 1e6;
 
         // Update time.
-        let day_cycle = 60.;
+        let _day_cycle = 60.;
         //self.time += ft / day_cycle;
         if self.time > 1. {
             self.time = 0.;
@@ -244,7 +249,7 @@ impl GameUpdateState {
         self.viewport_y = std::cmp::max(2 * TILE_SIZE, self.viewport_y);
     }
 
-    pub fn poststep(&mut self, ts: u64) -> GameRenderDesc {
+    pub fn poststep(&mut self, _ts: u64) -> GameRenderDesc {
         // Lighting.
         let (light_x, light_y, light_w, light_h, r_channel, g_channel, b_channel) = {
             // Calculate sky light value.
@@ -401,20 +406,20 @@ impl GameUpdateState {
         }
     }
 
-    fn handle_net_events(&mut self, ts: u64) {
+    fn handle_net_events(&mut self, _ts: u64) {
         for e in self.net_manager.recv() {
             match e.kind {
                 NetEventKind::Data(bytes) => {
-                    let msgs: Box<[ServerNetMessage]> = deserialize(bytes);
+                    let _msgs: Box<[ServerNetMessage]> = deserialize(bytes);
                 }
-                _ => println!("{e:?}"),
+                _ => log!("{e:?}"),
             }
         }
     }
 
     fn handle_input_events(
         &mut self,
-        ts: u64,
+        _ts: u64,
         input_events: impl Iterator<Item = InputEvent>,
     ) -> bool {
         for e in input_events {
@@ -465,19 +470,17 @@ impl GameUpdateState {
                 InputEvent::MouseClick {
                     mouse_button,
                     press_state,
-                } => {
-                    match (mouse_button, press_state) {
-                        (MouseButton::Left | MouseButton::Right, PressState::Down) => {
-                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
-                            match mouse_button {
-                                MouseButton::Left => self.fg_tiles[index] = Tile::None,
-                                MouseButton::Right => self.bg_tiles[index] = Tile::None,
-                                _ => unreachable!(),
-                            }
+                } => match (mouse_button, press_state) {
+                    (MouseButton::Left | MouseButton::Right, PressState::Down) => {
+                        let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
+                        match mouse_button {
+                            MouseButton::Left => self.fg_tiles[index] = Tile::None,
+                            MouseButton::Right => self.bg_tiles[index] = Tile::None,
+                            _ => unreachable!(),
                         }
-                        _ => {}
                     }
-                }
+                    _ => {}
+                },
             }
         }
 

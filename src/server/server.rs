@@ -38,13 +38,9 @@ impl Server {
 
         //
         loop {
-            // Skip if enough time has passed.
+            // Wait for enough time to process a frame.
             let next_timestamp = crate::time::wait(self.update_ts + frametime, 1_000);
-            assert!(
-                next_timestamp - self.update_ts >= frametime,
-                "{} {frametime}",
-                next_timestamp - self.update_ts
-            );
+            assert!(next_timestamp - self.update_ts >= frametime,);
 
             // Prestep.
             let ts = timestamp_as_usecs();
@@ -74,7 +70,7 @@ impl Server {
             // Time printing.
             if self.update_n > 60 * 30 {
                 println!(
-                    "[Server] Update total: {:.2}ms.\n  Prestep: {:.2}ms.\n  Step: {:.2}ms.\n  Poststep: {:.2}ms.",
+                    "\x1b[91m[Server] Update total: {:.2}ms.\n  Prestep: {:.2}ms.\n  Step: {:.2}ms.\n  Poststep: {:.2}ms.\x1b[0m",
                     ((self.prestep_acc + self.step_acc + self.poststep_acc)
                         / self.update_n) as f32
                         * 0.001,
@@ -93,6 +89,6 @@ impl Server {
     }
 
     pub fn update_once(&mut self) {
-        let frametime = 16666_u64;
+        let _frametime = 16666_u64;
     }
 }

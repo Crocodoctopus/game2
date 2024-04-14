@@ -1,7 +1,6 @@
-use crate::net::{NetEvent, NetEventKind, ServerNetManager};
+use crate::net::{NetEventKind, ServerNetManager};
 use crate::shared::*;
-use std::collections::HashMap;
-use std::net::SocketAddr;
+use crate::server::log;
 use std::path::Path;
 
 pub struct GameUpdateState {
@@ -17,7 +16,7 @@ pub struct GameUpdateState {
 }
 
 impl GameUpdateState {
-    pub fn new(root: &'static Path, net_manager: ServerNetManager) -> Self {
+    pub fn new(_root: &'static Path, net_manager: ServerNetManager) -> Self {
         let world_w = 8400;
         let world_h = 2400;
         let mut fg_tiles = vec![Tile::None; world_w * world_h].into_boxed_slice();
@@ -84,7 +83,6 @@ impl GameUpdateState {
             match e.kind {
                 NetEventKind::Data(bytes) => {
                     let msgs: Vec<ClientNetMessage> = deserialize(bytes).into_vec();
-                    println!("[Server] {msgs:?}");
                     for msg in msgs {
                         match msg {
                             ClientNetMessage::Connect { .. } => {
@@ -142,14 +140,15 @@ impl GameUpdateState {
                                 // Calculate load area.
                                 const TILE_CHUNK_SIZE: usize = TILE_SIZE * CHUNK_SIZE;
                                 let x1 = (spawn_x - viewport_w / 2) / TILE_CHUNK_SIZE;
-                                let x2 = (spawn_x + viewport_w / 2 + TILE_CHUNK_SIZE - 1) / TILE_CHUNK_SIZE;
+                                let x2 = (spawn_x + viewport_w / 2 + TILE_CHUNK_SIZE - 1)
+                                    / TILE_CHUNK_SIZE;
                                 let y1 = (spawn_y - viewport_h / 2) / TILE_CHUNK_SIZE;
-                                let y2 = (spawn_y + viewport_h / 2 + TILE_CHUNK_SIZE - 1) / TILE_CHUNK_SIZE;
+                                let y2 = (spawn_y + viewport_h / 2 + TILE_CHUNK_SIZE - 1)
+                                    / TILE_CHUNK_SIZE;
                                 //assert_eq!(x2 - x1, CHUNK_LOAD_WIDTH);
                                 //assert_eq!(y2 - y1, CHUNK_LOAD_HEIGHT);
 
                                 // Send chunk data.
-                                println!("{}..{} {}..{}", x1, x2, y1, y2);
                                 for cy in y1..y2 {
                                     for cx in x1..x2 {
                                         let mut fg_tiles = [Tile::None; CHUNK_AREA];
@@ -179,7 +178,7 @@ impl GameUpdateState {
                                 msgs.push(ServerNetMessage::Start);
 
                                 let se = serialize(&msgs);
-                                println!("[Server] Initial sync with size {}.", se.len());
+                                log!("Initial sync with size {}.", se.len());
 
                                 self.net_manager.send_ru(e.source, se);
                             }

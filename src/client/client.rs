@@ -1,5 +1,5 @@
-use crate::client::{GameRenderDesc, GameRenderState, GameUpdateState};
-use crate::net::{ClientNetManager, NetEvent, NetEventKind};
+use crate::client::{log, GameRenderDesc, GameRenderState, GameUpdateState};
+use crate::net::{ClientNetManager, NetEventKind};
 use crate::shared::*;
 use crate::time::*;
 use crate::{InputEvent, Window};
@@ -9,6 +9,7 @@ use std::path::Path;
 pub struct Client<'a> {
     // Misc.
     root: &'static Path,
+    #[allow(dead_code)]
     window: &'a Window,
     server_port: u16,
 
@@ -84,8 +85,8 @@ impl<'a> Client<'a> {
                                         break 'start;
                                     }
 
-                                    _ => println!(
-                                        "[Client] Unhandled event received during join sequence."
+                                    _ => log!(
+                                        "Unhandled event received during join sequence."
                                     ),
                                 }
                             }
@@ -146,11 +147,10 @@ impl<'a> Client<'a> {
 
                 // Time printing.
                 if self.update_n > 60 * 30 {
-                    println!(
-                    "[Client] Update total: {:.2}ms.\n  Prestep: {:.2}ms.\n  Step: {:.2}ms.\n  Poststep: {:.2}ms.",
+                    log!(
+                    "Update total: {:.2}ms.\n  Prestep: {:.2}ms.\n  Step: {:.2}ms.\n  Poststep: {:.2}ms.",
                     ((self.prestep_acc + self.step_acc + self.poststep_acc)
-                        / self.update_n) as f32
-                        * 0.001,
+                        / self.update_n) as f32 * 0.001,
                     (self.prestep_acc / self.update_n) as f32 * 0.001,
                     (self.step_acc / self.update_n) as f32 * 0.001,
                     (self.poststep_acc / self.update_n) as f32 * 0.001,
@@ -180,8 +180,8 @@ impl<'a> Client<'a> {
 
                 // Time printing.
                 if self.render_n > 60 * 30 {
-                    println!(
-                        "[Client] Render total: {:.2}ms.",
+                    log!(
+                        "Render total: {:.2}ms.",
                         (self.render_acc / self.render_n) as f32 * 0.001
                     );
                     self.render_acc = 0;
