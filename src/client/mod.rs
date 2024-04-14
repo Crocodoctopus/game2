@@ -11,7 +11,7 @@ use game_update_state::*;
 pub mod client_log {
     macro_rules! log {
         ($($args:tt)*) => {{
-            println!("\x1b[92m[Client] {}\x1b[0m", format!($($args)*));  
+            println!("\x1b[92m[Client] {}\x1b[0m", format!($($args)*));
         }}
     }
 

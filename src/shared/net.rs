@@ -2,15 +2,19 @@ use crate::shared::{Tile, CHUNK_AREA};
 
 #[derive(Clone, bitcode::Encode, bitcode::Decode, Debug)]
 pub enum ClientNetMessage {
+    Ping,
+
     Connect { version: (u8, u8) },
 
     Join,
 
-    RequestChunk { x: u16, y: u16, seq: u64 },
+    RequestChunk { x: u16, y: u16, seq: u32 },
 }
 
 #[derive(Clone, bitcode::Encode, bitcode::Decode, Debug)]
 pub enum ServerNetMessage {
+    Ping,
+
     ConnectAccept,
 
     ConnectReject {
@@ -27,7 +31,7 @@ pub enum ServerNetMessage {
     ChunkSync {
         x: u16,
         y: u16,
-        seq: u64,
+        seq: u32,
         fg_tiles: [Tile; CHUNK_AREA],
         bg_tiles: [Tile; CHUNK_AREA],
     },

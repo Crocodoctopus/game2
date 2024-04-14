@@ -28,7 +28,7 @@ fn light_math(i: f32) -> f32 {
     if i == 0 {
         return 0.0;
     }
-    return pow(0.93, 40. - i);
+    return pow(0.92, 40. - i);
 }
 
 @fragment

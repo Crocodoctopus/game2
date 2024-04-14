@@ -7,7 +7,7 @@ pub use server::*;
 pub mod server_log {
     macro_rules! log {
         ($($args:tt)*) => {{
-            println!("\x1b[91m[Server] {}\x1b[0m", format!($($args)*));  
+            println!("\x1b[91m[Server] {}\x1b[0m", format!($($args)*));
         }}
     }
 

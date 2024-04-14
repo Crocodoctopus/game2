@@ -85,9 +85,7 @@ impl<'a> Client<'a> {
                                         break 'start;
                                     }
 
-                                    _ => log!(
-                                        "Unhandled event received during join sequence."
-                                    ),
+                                    _ => log!("Unhandled event received during join sequence."),
                                 }
                             }
                         }

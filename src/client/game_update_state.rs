@@ -33,6 +33,7 @@ pub struct GameUpdateState {
     // Tiles.
     world_w: usize,
     world_h: usize,
+    chunk_seqs: Box<[u32]>,
     fg_tiles: Box<[Tile]>,
     bg_tiles: Box<[Tile]>,
 
@@ -52,6 +53,7 @@ impl GameUpdateState {
 
         let mut world_w = 0;
         let mut world_h = 0;
+        let mut chunk_seqs: Box<[u32]> = Box::new([]);
         let mut fg_tiles: Box<[Tile]> = Box::new([]);
         let mut bg_tiles: Box<[Tile]> = Box::new([]);
 
@@ -83,6 +85,8 @@ impl GameUpdateState {
                                         spawn_y = inner_spawn_y as usize;
                                         world_w = width as usize;
                                         world_h = height as usize;
+                                        chunk_seqs = vec![0; world_w * world_h / CHUNK_AREA]
+                                            .into_boxed_slice();
                                         fg_tiles =
                                             vec![Tile::None; world_w * world_h].into_boxed_slice();
                                         bg_tiles =
@@ -92,12 +96,21 @@ impl GameUpdateState {
                                     ServerNetMessage::ChunkSync {
                                         x,
                                         y,
-                                        seq: _,
+                                        seq,
                                         fg_tiles: inner_fg_tiles,
                                         bg_tiles: inner_bg_tiles,
                                     } => {
                                         let cx = x as usize;
                                         let cy = y as usize;
+                                        let cur_seq =
+                                            &mut chunk_seqs[cx + cy * world_w / CHUNK_SIZE];
+
+                                        // If the current sequence isn't less, skip this chunk.
+                                        if *cur_seq >= seq {
+                                            continue;
+                                        }
+
+                                        *cur_seq = seq;
                                         for y in 0..CHUNK_SIZE {
                                             for x in 0..CHUNK_SIZE {
                                                 let src_index = x + y * CHUNK_SIZE;
@@ -155,11 +168,12 @@ impl GameUpdateState {
             viewport_h,
 
             // World.
-            time: 0.,
+            time: 0.5,
 
             // Tiles.
             world_w,
             world_h,
+            chunk_seqs,
             fg_tiles,
             bg_tiles,
 
@@ -250,6 +264,30 @@ impl GameUpdateState {
     }
 
     pub fn poststep(&mut self, _ts: u64) -> GameRenderDesc {
+        // Request chunks for server.
+        {
+            const TILE_CHUNK_SIZE: usize = TILE_SIZE * CHUNK_SIZE;
+            let cx = self.viewport_x + self.viewport_w / 2;
+            let cy = self.viewport_y + self.viewport_h / 2;
+            let x1 = (cx.saturating_sub(self.viewport_w / 2)) / TILE_CHUNK_SIZE;
+            let x2 = (cx + self.viewport_w / 2 + TILE_CHUNK_SIZE - 1) / TILE_CHUNK_SIZE;
+            let y1 = (cy.saturating_sub(self.viewport_h / 2)) / TILE_CHUNK_SIZE;
+            let y2 = (cy + self.viewport_h / 2 + TILE_CHUNK_SIZE - 1) / TILE_CHUNK_SIZE;
+
+            let mut msgs = vec![];
+            for y in y1..y2 {
+                for x in x1..x2 {
+                    msgs.push(ClientNetMessage::RequestChunk {
+                        x: x as u16,
+                        y: y as u16,
+                        seq: 0,
+                    });
+                }
+            }
+
+            self.net_manager.send_uu(serialize(&msgs));
+        }
+
         // Lighting.
         let (light_x, light_y, light_w, light_h, r_channel, g_channel, b_channel) = {
             // Calculate sky light value.
@@ -381,6 +419,8 @@ impl GameUpdateState {
             })
             .collect();
 
+        //
+        self.net_manager.poll();
         GameRenderDesc {
             viewport_x: self.viewport_x as f32,
             viewport_y: self.viewport_y as f32,
@@ -410,9 +450,47 @@ impl GameUpdateState {
         for e in self.net_manager.recv() {
             match e.kind {
                 NetEventKind::Data(bytes) => {
-                    let _msgs: Box<[ServerNetMessage]> = deserialize(bytes);
+                    for msg in deserialize(bytes).to_vec() {
+                        match msg {
+                            ServerNetMessage::ChunkSync {
+                                x,
+                                y,
+                                seq,
+                                fg_tiles,
+                                bg_tiles,
+                            } => {
+                                let cx = x as usize;
+                                let cy = y as usize;
+                                let cur_seq =
+                                    &mut self.chunk_seqs[cx + cy * self.world_w / CHUNK_SIZE];
+
+                                // If the current sequence isn't less, skip this chunk.
+                                if *cur_seq >= seq {
+                                    continue;
+                                }
+
+                                *cur_seq = seq;
+                                for y in 0..CHUNK_SIZE {
+                                    for x in 0..CHUNK_SIZE {
+                                        let src_index = x + y * CHUNK_SIZE;
+                                        let dst_index = x
+                                            + cx * CHUNK_SIZE
+                                            + (y + cy * CHUNK_SIZE) * self.world_w;
+                                        self.fg_tiles[dst_index] = fg_tiles[src_index];
+                                        self.bg_tiles[dst_index] = bg_tiles[src_index];
+                                    }
+                                }
+                            }
+
+                            ServerNetMessage::Ping => self
+                                .net_manager
+                                .send_ru(serialize(&[ClientNetMessage::Ping])),
+
+                            _ => log!("Uncaught event: {msg:?}."),
+                        }
+                    }
                 }
-                _ => log!("{e:?}"),
+                _ => log!("Uncaught net event: {e:?}."),
             }
         }
     }

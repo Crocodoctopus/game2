@@ -1,6 +1,6 @@
 pub const LIGHT_MAX: u8 = 40;
 pub const FADE_MIN: u8 = 1;
-pub const FADE_SOLID: u8 = 8;
+pub const FADE_SOLID: u8 = 6;
 pub const FADE_DENSE: u8 = 12;
 //  [E][E] [E][E]
 //  [E][0] [1][2]

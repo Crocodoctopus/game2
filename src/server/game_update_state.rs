@@ -1,6 +1,6 @@
 use crate::net::{NetEventKind, ServerNetManager};
-use crate::shared::*;
 use crate::server::log;
+use crate::shared::*;
 use std::path::Path;
 
 pub struct GameUpdateState {
@@ -10,7 +10,7 @@ pub struct GameUpdateState {
     // Tiles.
     world_w: usize,
     world_h: usize,
-    //chunk_seqs: Box<[u32]>,
+    chunk_seqs: Box<[u32]>,
     fg_tiles: Box<[Tile]>,
     bg_tiles: Box<[Tile]>,
 }
@@ -19,6 +19,7 @@ impl GameUpdateState {
     pub fn new(_root: &'static Path, net_manager: ServerNetManager) -> Self {
         let world_w = 8400;
         let world_h = 2400;
+        let chunk_seqs = vec![1; world_w * world_h].into_boxed_slice();
         let mut fg_tiles = vec![Tile::None; world_w * world_h].into_boxed_slice();
         let mut bg_tiles = vec![Tile::None; world_w * world_h].into_boxed_slice();
         for y in 0..world_h {
@@ -59,7 +60,7 @@ impl GameUpdateState {
 
             world_w,
             world_h,
-            //chunk_seqs: vec![1; world_w * world_h / CHUNK_AREA],
+            chunk_seqs,
             fg_tiles,
             bg_tiles,
         }
@@ -80,37 +81,45 @@ impl GameUpdateState {
 
     fn handle_net_events(&mut self, _ts: u64) {
         for e in self.net_manager.recv() {
+            let source = e.source;
             match e.kind {
                 NetEventKind::Data(bytes) => {
-                    let msgs: Vec<ClientNetMessage> = deserialize(bytes).into_vec();
-                    for msg in msgs {
+                    for msg in deserialize(bytes).into_vec() {
                         match msg {
                             ClientNetMessage::Connect { .. } => {
                                 // Accept all connections.
-                                self.net_manager.send_ru(
-                                    e.source,
-                                    serialize(&[ServerNetMessage::ConnectAccept]),
-                                );
+                                self.net_manager
+                                    .send_ru(source, serialize(&[ServerNetMessage::ConnectAccept]));
                                 // TODO push to connection hashmap
                             }
 
                             ClientNetMessage::RequestChunk { x, y, seq } => {
                                 // TODO seq
-                                let inner_x = x as usize;
-                                let inner_y = y as usize;
+                                let cx = x as usize;
+                                let cy = y as usize;
+                                let cur_seq =
+                                    &mut self.chunk_seqs[cx + cy * self.world_w / CHUNK_SIZE];
+
+                                if *cur_seq <= seq {
+                                    continue;
+                                }
+
+                                *cur_seq = seq;
                                 let mut fg_tiles = [Tile::None; CHUNK_AREA];
                                 let mut bg_tiles = [Tile::None; CHUNK_AREA];
                                 for y in 0..CHUNK_SIZE {
                                     for x in 0..CHUNK_SIZE {
-                                        fg_tiles[x + y * CHUNK_SIZE] = self.fg_tiles
-                                            [(inner_x + x) + (inner_y + y) * self.world_w];
-                                        bg_tiles[x + y * CHUNK_SIZE] = self.bg_tiles
-                                            [(inner_x + x) + (inner_y + y) * self.world_w];
+                                        let src_index = x
+                                            + cx * CHUNK_SIZE
+                                            + (y + cy * CHUNK_SIZE) * self.world_w;
+                                        let dst_index = x + y * CHUNK_SIZE;
+                                        fg_tiles[dst_index] = self.fg_tiles[src_index];
+                                        bg_tiles[dst_index] = self.bg_tiles[src_index];
                                     }
                                 }
 
                                 self.net_manager.send_ru(
-                                    e.source,
+                                    source,
                                     serialize(&[ServerNetMessage::ChunkSync {
                                         x,
                                         y,
@@ -119,6 +128,8 @@ impl GameUpdateState {
                                         bg_tiles,
                                     }]),
                                 );
+                                // Don't flood the console with join ChunkRequests.
+                                log!("Chunk ({}, {}) sent to {:?}.", cx, cy, source);
                             }
 
                             ClientNetMessage::Join => {
@@ -145,8 +156,6 @@ impl GameUpdateState {
                                 let y1 = (spawn_y - viewport_h / 2) / TILE_CHUNK_SIZE;
                                 let y2 = (spawn_y + viewport_h / 2 + TILE_CHUNK_SIZE - 1)
                                     / TILE_CHUNK_SIZE;
-                                //assert_eq!(x2 - x1, CHUNK_LOAD_WIDTH);
-                                //assert_eq!(y2 - y1, CHUNK_LOAD_HEIGHT);
 
                                 // Send chunk data.
                                 for cy in y1..y2 {
@@ -180,8 +189,14 @@ impl GameUpdateState {
                                 let se = serialize(&msgs);
                                 log!("Initial sync with size {}.", se.len());
 
-                                self.net_manager.send_ru(e.source, se);
+                                self.net_manager.send_ru(source, se);
+                                self.net_manager
+                                    .send_ru(source, serialize(&[ServerNetMessage::Ping]));
                             }
+
+                            ClientNetMessage::Ping => self
+                                .net_manager
+                                .send_ru(source, serialize(&[ServerNetMessage::Ping])),
                         }
                     }
                 }
