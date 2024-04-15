@@ -1,4 +1,19 @@
 use crate::tile::*;
+use bitcode::{Decode, Encode};
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default, Encode, Decode, Hash)]
+pub struct HumanoidId(u32);
+
+impl HumanoidId {
+    pub fn new() -> Self {
+        Self(0)
+    }
+
+    pub fn next(&mut self) -> HumanoidId {
+        self.0 += 1;
+        return HumanoidId(self.0 - 1);
+    }
+}
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug)]
@@ -6,10 +21,8 @@ pub enum HumanoidFlags {
     OnGround = 1 << 1,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Encode, Decode)]
 pub struct Humanoid {
-    pub id: usize,
-
     // Dimensions.
     pub w: f32,
     pub h: f32,

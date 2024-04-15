@@ -3,6 +3,7 @@ use crate::net::{ClientNetManager, NetEventKind};
 use crate::shared::*;
 use crate::shared::{Tile, TILE_LIGHT_PROPERTIES, TILE_SIZE};
 use crate::InputEvent;
+use std::collections::HashMap;
 use std::path::Path;
 
 pub struct GameUpdateState {
@@ -38,7 +39,8 @@ pub struct GameUpdateState {
     bg_tiles: Box<[Tile]>,
 
     // Humanoids.
-    humanoids: Vec<Humanoid>,
+    player_id: HumanoidId,
+    humanoids: HashMap<HumanoidId, Humanoid>,
 }
 
 impl GameUpdateState {
@@ -57,6 +59,9 @@ impl GameUpdateState {
         let mut fg_tiles: Box<[Tile]> = Box::new([]);
         let mut bg_tiles: Box<[Tile]> = Box::new([]);
 
+        let mut player_id = HumanoidId::new();
+        let mut humanoids = HashMap::new();
+
         // Start join sequence.
         {
             // Initial join sequence.
@@ -74,12 +79,16 @@ impl GameUpdateState {
                         NetEventKind::Data(bytes) => {
                             for msg in deserialize(bytes).to_vec() {
                                 match msg {
-                                    ServerNetMessage::WorldInfo {
+                                    ServerNetMessage::JoinAccept {
                                         width,
                                         height,
+                                        id,
                                         spawn_x: inner_spawn_x,
                                         spawn_y: inner_spawn_y,
                                     } => {
+                                        // Player.
+                                        player_id = id;
+
                                         // Init world.
                                         spawn_x = inner_spawn_x as usize;
                                         spawn_y = inner_spawn_y as usize;
@@ -123,9 +132,13 @@ impl GameUpdateState {
                                         }
                                     }
 
-                                    ServerNetMessage::Start => break 'start,
+                                    ServerNetMessage::Start => {
+                                        net_manager
+                                            .send_ru(serialize(&[ClientNetMessage::JoinComplete]));
+                                        break 'start;
+                                    }
 
-                                    _ => panic!(),
+                                    _ => panic!("PANIC: {:?}", msg),
                                 }
                             }
                         }
@@ -135,15 +148,6 @@ impl GameUpdateState {
                 }
             }
         }
-
-        // Temp.
-        let humanoids = vec![Humanoid {
-            x: (spawn_x * TILE_SIZE) as f32,
-            y: (spawn_y * TILE_SIZE) as f32,
-            w: 16.,
-            h: 24.,
-            ..Default::default()
-        }];
 
         Self {
             // Net manager.
@@ -178,6 +182,7 @@ impl GameUpdateState {
             bg_tiles,
 
             // Humanoids.
+            player_id,
             humanoids,
         }
     }
@@ -210,8 +215,7 @@ impl GameUpdateState {
         }
 
         // Player state stuff.
-        if let Some(player) = self.humanoids.get_mut(0) {
-            player.ddy += 500.;
+        if let Some(player) = self.humanoids.get_mut(&self.player_id) {
             if self.right_queue & 1 != 0 {
                 player.ddx += 1500.;
             }
@@ -238,8 +242,11 @@ impl GameUpdateState {
         }
 
         // Humanoid physics stuff.
-        for humanoid in &mut self.humanoids {
+        for humanoid in self.humanoids.values_mut() {
             humanoid.flags &= !(HumanoidFlags::OnGround as u8);
+            
+            // Gravity.
+            humanoid.ddy += 500.;
 
             let last_y = humanoid.y;
             update_humanoid_physics_y(humanoid, ft);
@@ -253,7 +260,7 @@ impl GameUpdateState {
         }
 
         // Clamp position (TODO: right-bottom world clamp).
-        if let Some(player) = self.humanoids.get(0) {
+        if let Some(player) = self.humanoids.get(&mut self.player_id) {
             self.viewport_x =
                 ((player.x + player.w / 2.) as usize).saturating_sub(self.viewport_w / 2);
             self.viewport_y =
@@ -264,163 +271,30 @@ impl GameUpdateState {
     }
 
     pub fn poststep(&mut self, _ts: u64) -> GameRenderDesc {
-        // Request chunks for server.
-        {
-            const TILE_CHUNK_SIZE: usize = TILE_SIZE * CHUNK_SIZE;
-            let cx = self.viewport_x + self.viewport_w / 2;
-            let cy = self.viewport_y + self.viewport_h / 2;
-            let x1 = (cx.saturating_sub(self.viewport_w / 2)) / TILE_CHUNK_SIZE;
-            let x2 = (cx + self.viewport_w / 2 + TILE_CHUNK_SIZE - 1) / TILE_CHUNK_SIZE;
-            let y1 = (cy.saturating_sub(self.viewport_h / 2)) / TILE_CHUNK_SIZE;
-            let y2 = (cy + self.viewport_h / 2 + TILE_CHUNK_SIZE - 1) / TILE_CHUNK_SIZE;
+        // Send the server RequestChunk messages based on view.
+        request_chunks_from_server(self);
 
-            let mut msgs = vec![];
-            for y in y1..y2 {
-                for x in x1..x2 {
-                    msgs.push(ClientNetMessage::RequestChunk {
-                        x: x as u16,
-                        y: y as u16,
-                        seq: 0,
-                    });
-                }
-            }
-
-            self.net_manager.send_uu(serialize(&msgs));
+        // Send the server the player's current state.
+        if let Some(player) = self.humanoids.get(&self.player_id) {
+            let bytes = serialize(&[ClientNetMessage::SyncPlayer {
+                player: player.clone(),
+            }]);
+            self.net_manager.send_uu(bytes);
         }
 
-        // Lighting.
-        let (light_x, light_y, light_w, light_h, r_channel, g_channel, b_channel) = {
-            // Calculate sky light value.
-            let (sky_r, sky_g, sky_b) = 'out: {
-                // Morning.
-                if self.time < 7. / 24. {
-                    break 'out (10, 10, 10);
-                }
-
-                // Day.
-                if self.time < 18. / 24. {
-                    break 'out (40, 40, 40);
-                }
-
-                break 'out (10, 10, 10);
-            };
-
-            // Light lookup.
-            let tile_light_property_map = &TILE_LIGHT_PROPERTIES;
-
-            // Calculate visible region.
-            let x1 = (self.viewport_x / 16).saturating_sub(LIGHT_MAX as usize);
-            let y1 = (self.viewport_y / 16).saturating_sub(LIGHT_MAX as usize);
-            let x2 = (self.viewport_x + self.viewport_w + 15) / 16 + LIGHT_MAX as usize;
-            let y2 = (self.viewport_y + self.viewport_h + 15) / 16 + LIGHT_MAX as usize;
-            let (w, h) = (x2 - x1, y2 - y1);
-
-            use crate::light::*;
-            let mut r_channel = create_light_map_base(w, h);
-            let mut g_channel = create_light_map_base(w, h);
-            let mut b_channel = create_light_map_base(w, h);
-            let mut fade_map = create_fade_map_base(w, h);
-
-            let mut r_probes = Vec::with_capacity(1024);
-            let mut g_probes = Vec::with_capacity(1024);
-            let mut b_probes = Vec::with_capacity(1024);
-            for y in 1..h - 1 {
-                for x in 1..w - 1 {
-                    let world_index = (x + x1) + (y + y1) * self.world_w;
-                    let light_index = x + y * w;
-
-                    let fg_tile = self.fg_tiles[world_index];
-                    let bg_tile = self.bg_tiles[world_index];
-
-                    // Special case (None, None).
-                    if fg_tile == Tile::None && bg_tile == Tile::None {
-                        r_channel[light_index] = sky_r;
-                        g_channel[light_index] = sky_g;
-                        b_channel[light_index] = sky_b;
-                        r_probes.push(light_index as u16);
-                        g_probes.push(light_index as u16);
-                        b_probes.push(light_index as u16);
-                        continue;
-                    }
-
-                    // Special case (None, Some).
-                    if fg_tile == Tile::None && bg_tile != Tile::None {
-                        fade_map[light_index] = FADE_MIN;
-                        continue;
-                    }
-
-                    // Case (Some, _).
-                    if fg_tile != Tile::None {
-                        let fg_light_property = tile_light_property_map[fg_tile as usize];
-
-                        //
-                        fade_map[light_index] = fg_light_property.fade;
-
-                        //
-                        let (r, g, b) = fg_light_property.light;
-                        if r > 0 {
-                            r_channel[light_index] = r;
-                            r_probes.push(light_index as u16);
-                        }
-                        if g > 0 {
-                            g_channel[light_index] = g;
-                            g_probes.push(light_index as u16);
-                        }
-                        if b > 0 {
-                            b_channel[light_index] = b;
-                            b_probes.push(light_index as u16);
-                        }
-                        continue;
-                    }
-                }
-            }
-
-            fill_light_map(w, &mut r_channel, &fade_map, r_probes);
-            fill_light_map(w, &mut g_channel, &fade_map, g_probes);
-            fill_light_map(w, &mut b_channel, &fade_map, b_probes);
-
-            (x1, y1, w, h, r_channel, g_channel, b_channel)
-        };
+        // Calculate light map.
+        let (light_x, light_y, light_w, light_h, r, g, b) = calculate_light_map(self);
 
         // Clone the tiles in the visible range (plus 1).
-        let (tiles_x, tiles_y, tiles_w, tiles_h, fg_tiles, bg_tiles) = {
-            let x1 = (self.viewport_x - 4) / 16 - 1;
-            let y1 = (self.viewport_y - 4) / 16 - 1;
-            let x2 = (self.viewport_x + self.viewport_w + 4 + 15) / 16 + 1;
-            let y2 = (self.viewport_y + self.viewport_h + 4 + 15) / 16 + 1;
-            let mut fg_tiles =
-                vec![TileRenderDesc(Tile::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
-            let mut bg_tiles =
-                vec![TileRenderDesc(Tile::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
-            let w = x2 - x1;
-            let h = y2 - y1;
-            for y in 0..h {
-                for x in 0..w {
-                    let src_index = (x + x1) + (y + y1) * self.world_w;
-                    let dst_index = x + y * w;
-                    fg_tiles[dst_index] = TileRenderDesc(self.fg_tiles[src_index]);
-                    bg_tiles[dst_index] = TileRenderDesc(self.bg_tiles[src_index]);
-                }
-            }
-            (x1, y1, x2 - x1, y2 - y1, fg_tiles, bg_tiles)
-        };
+        let (tiles_x, tiles_y, tiles_w, tiles_h, fg_tiles, bg_tiles) = clone_visible_tile_map(self);
 
-        // Clone sprites.
-        let sprites = self
-            .humanoids
-            .iter()
-            .map(|humanoid| SpriteRenderDesc {
-                x: humanoid.x.floor(),
-                y: humanoid.y.floor(),
-                w: humanoid.w,
-                h: humanoid.h,
-                u: 0.,
-                v: 0.,
-            })
-            .collect();
+        // Clone the sprites in the visible range..
+        let sprites = clone_visible_sprites(self);
 
-        //
+        // Poll the network to send all messages.
         self.net_manager.poll();
+
+        // Pass the game render desc to the renderer.
         GameRenderDesc {
             viewport_x: self.viewport_x as f32,
             viewport_y: self.viewport_y as f32,
@@ -433,9 +307,9 @@ impl GameUpdateState {
             light_y,
             light_w,
             light_h,
-            r_channel,
-            g_channel,
-            b_channel,
+            r_channel: r,
+            g_channel: g,
+            b_channel: b,
 
             tiles_x,
             tiles_y,
@@ -464,8 +338,7 @@ impl GameUpdateState {
                                 let cur_seq =
                                     &mut self.chunk_seqs[cx + cy * self.world_w / CHUNK_SIZE];
 
-                                // If the current sequence isn't less, skip this chunk.
-                                if *cur_seq >= seq {
+                                if !(*cur_seq < seq) {
                                     continue;
                                 }
 
@@ -482,15 +355,28 @@ impl GameUpdateState {
                                 }
                             }
 
+                            ServerNetMessage::HumanoidSync { humanoids } => {
+                                // Clone player (if it can be found).
+                                let player = self.humanoids.get(&self.player_id).cloned();
+
+                                // Swap.
+                                self.humanoids = humanoids;
+
+                                // Put player back in.
+                                if let Some(player) = player {
+                                    self.humanoids.get_mut(&self.player_id).map(|p| *p = player);
+                                }
+                            }
+
                             ServerNetMessage::Ping => self
                                 .net_manager
                                 .send_ru(serialize(&[ClientNetMessage::Ping])),
 
-                            _ => log!("Uncaught event: {msg:?}."),
+                            _ => panic!("Uncaught event: {msg:?}."),
                         }
                     }
                 }
-                _ => log!("Uncaught net event: {e:?}."),
+                _ => panic!("Uncaught net event: {e:?}."),
             }
         }
     }
@@ -564,4 +450,167 @@ impl GameUpdateState {
 
         false
     }
+}
+
+fn request_chunks_from_server(game: &mut GameUpdateState) {
+    const TILE_CHUNK_SIZE: usize = TILE_SIZE * CHUNK_SIZE;
+    let cx = game.viewport_x + game.viewport_w / 2;
+    let cy = game.viewport_y + game.viewport_h / 2;
+    let x1 = (cx.saturating_sub(game.viewport_w / 2)) / TILE_CHUNK_SIZE;
+    let x2 = (cx + game.viewport_w / 2 + TILE_CHUNK_SIZE - 1) / TILE_CHUNK_SIZE;
+    let y1 = (cy.saturating_sub(game.viewport_h / 2)) / TILE_CHUNK_SIZE;
+    let y2 = (cy + game.viewport_h / 2 + TILE_CHUNK_SIZE - 1) / TILE_CHUNK_SIZE;
+
+    let mut msgs = vec![];
+    for y in y1..y2 {
+        for x in x1..x2 {
+            msgs.push(ClientNetMessage::RequestChunk {
+                x: x as u16,
+                y: y as u16,
+                seq: game.chunk_seqs[x + y * game.world_w / CHUNK_SIZE],
+            });
+        }
+    }
+
+    let bytes = serialize(&msgs);
+    //log!("{}", bytes.len());
+    game.net_manager.send_uu(serialize(&msgs));
+}
+
+fn calculate_light_map(
+    game: &mut GameUpdateState,
+) -> (usize, usize, usize, usize, Box<[u8]>, Box<[u8]>, Box<[u8]>) {
+    // Calculate sky light value.
+    let (sky_r, sky_g, sky_b) = 'out: {
+        // Morning.
+        if game.time < 7. / 24. {
+            break 'out (10, 10, 10);
+        }
+
+        // Day.
+        if game.time < 18. / 24. {
+            break 'out (40, 40, 40);
+        }
+
+        break 'out (10, 10, 10);
+    };
+
+    // Light lookup.
+    let tile_light_property_map = &TILE_LIGHT_PROPERTIES;
+
+    // Calculate visible region.
+    let x1 = (game.viewport_x / 16).saturating_sub(LIGHT_MAX as usize);
+    let y1 = (game.viewport_y / 16).saturating_sub(LIGHT_MAX as usize);
+    let x2 = (game.viewport_x + game.viewport_w + 15) / 16 + LIGHT_MAX as usize;
+    let y2 = (game.viewport_y + game.viewport_h + 15) / 16 + LIGHT_MAX as usize;
+    let (w, h) = (x2 - x1, y2 - y1);
+
+    use crate::light::*;
+    let mut r_channel = create_light_map_base(w, h);
+    let mut g_channel = create_light_map_base(w, h);
+    let mut b_channel = create_light_map_base(w, h);
+    let mut fade_map = create_fade_map_base(w, h);
+
+    let mut r_probes = Vec::with_capacity(1024);
+    let mut g_probes = Vec::with_capacity(1024);
+    let mut b_probes = Vec::with_capacity(1024);
+    for y in 1..h - 1 {
+        for x in 1..w - 1 {
+            let world_index = (x + x1) + (y + y1) * game.world_w;
+            let light_index = x + y * w;
+
+            let fg_tile = game.fg_tiles[world_index];
+            let bg_tile = game.bg_tiles[world_index];
+
+            // Special case (None, None).
+            if fg_tile == Tile::None && bg_tile == Tile::None {
+                r_channel[light_index] = sky_r;
+                g_channel[light_index] = sky_g;
+                b_channel[light_index] = sky_b;
+                r_probes.push(light_index as u16);
+                g_probes.push(light_index as u16);
+                b_probes.push(light_index as u16);
+                continue;
+            }
+
+            // Special case (None, Some).
+            if fg_tile == Tile::None && bg_tile != Tile::None {
+                fade_map[light_index] = FADE_MIN;
+                continue;
+            }
+
+            // Case (Some, _).
+            if fg_tile != Tile::None {
+                let fg_light_property = tile_light_property_map[fg_tile as usize];
+
+                //
+                fade_map[light_index] = fg_light_property.fade;
+
+                //
+                let (r, g, b) = fg_light_property.light;
+                if r > 0 {
+                    r_channel[light_index] = r;
+                    r_probes.push(light_index as u16);
+                }
+                if g > 0 {
+                    g_channel[light_index] = g;
+                    g_probes.push(light_index as u16);
+                }
+                if b > 0 {
+                    b_channel[light_index] = b;
+                    b_probes.push(light_index as u16);
+                }
+                continue;
+            }
+        }
+    }
+
+    fill_light_map(w, &mut r_channel, &fade_map, r_probes);
+    fill_light_map(w, &mut g_channel, &fade_map, g_probes);
+    fill_light_map(w, &mut b_channel, &fade_map, b_probes);
+
+    (x1, y1, w, h, r_channel, g_channel, b_channel)
+}
+
+fn clone_visible_tile_map(
+    game: &mut GameUpdateState,
+) -> (
+    usize,
+    usize,
+    usize,
+    usize,
+    Box<[TileRenderDesc]>,
+    Box<[TileRenderDesc]>,
+) {
+    let x1 = (game.viewport_x - 4) / 16 - 1;
+    let y1 = (game.viewport_y - 4) / 16 - 1;
+    let x2 = (game.viewport_x + game.viewport_w + 4 + 15) / 16 + 1;
+    let y2 = (game.viewport_y + game.viewport_h + 4 + 15) / 16 + 1;
+    let mut fg_tiles = vec![TileRenderDesc(Tile::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
+    let mut bg_tiles = vec![TileRenderDesc(Tile::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
+    let w = x2 - x1;
+    let h = y2 - y1;
+    for y in 0..h {
+        for x in 0..w {
+            let src_index = (x + x1) + (y + y1) * game.world_w;
+            let dst_index = x + y * w;
+            fg_tiles[dst_index] = TileRenderDesc(game.fg_tiles[src_index]);
+            bg_tiles[dst_index] = TileRenderDesc(game.bg_tiles[src_index]);
+        }
+    }
+    (x1, y1, x2 - x1, y2 - y1, fg_tiles, bg_tiles)
+}
+
+fn clone_visible_sprites(game: &mut GameUpdateState) -> Box<[SpriteRenderDesc]> {
+    game.humanoids
+        .values()
+        .map(|humanoid| SpriteRenderDesc {
+            x: humanoid.x.floor(),
+            y: humanoid.y.floor(),
+            w: humanoid.w,
+            h: humanoid.h,
+            u: 0.,
+            v: 0.,
+        })
+        .collect()
 }
