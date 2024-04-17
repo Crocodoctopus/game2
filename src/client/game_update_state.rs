@@ -216,55 +216,65 @@ impl GameUpdateState {
 
         // Player state stuff.
         if let Some(player) = self.humanoids.get_mut(&self.player_id) {
-            if self.right_queue & 1 != 0 {
-                player.ddx += 1500.;
-            }
-            if self.left_queue & 1 != 0 {
-                player.ddx -= 1500.;
-            }
+        }
 
-            // Check if jump was pressed at all during the last 3 frames.
-            let jump_buffer = (0..3)
-                .into_iter()
-                .map(|i| self.jump_queue >> i & 0b11 == 0b01)
-                .reduce(|b, acc| acc | b)
-                .unwrap();
+        // Humanoid AI pass.
+        for Humanoid { base, physics, ai } in self.humanoids.values_mut() {
+            match ai {
+                HumanoidAI::Player => {
+                    if self.right_queue & 1 != 0 {
+                        physics.ddx += 1500.;
+                    }
+                    if self.left_queue & 1 != 0 {
+                        physics.ddx -= 1500.;
+                    }
 
-            if jump_buffer && player.flags & (HumanoidFlags::OnGround as u8) != 0 {
-                player.dy -= 300.;
-            }
+                    // Check if jump was pressed at all during the last 3 frames.
+                    let jump_buffer = (0..3)
+                        .into_iter()
+                        .map(|i| self.jump_queue >> i & 0b11 == 0b01)
+                        .reduce(|b, acc| acc | b)
+                        .unwrap();
 
-            // World's best friction.
-            player.dx *= 0.80;
-            if player.dx.abs() < 0.5 {
-                player.dx = 0.;
+                    if jump_buffer && base.flags & HUMANOID_ON_GROUND_BIT != 0 {
+                        physics.dy -= 300.;
+                    }
+
+                    // World's best friction.
+                    physics.dx *= 0.80;
+                    if physics.dx.abs() < 0.5 {
+                        physics.dx = 0.;
+                    } 
+                }
+
+                HumanoidAI::Zombie => {
+                    // grr zombie
+                }
             }
         }
 
-        // Humanoid physics stuff.
-        for humanoid in self.humanoids.values_mut() {
-            humanoid.flags &= !(HumanoidFlags::OnGround as u8);
+        // Humanoid physics pass.
+        for Humanoid { base, physics, .. } in self.humanoids.values_mut() {
+            base.flags &= !HUMANOID_ON_GROUND_BIT;
             
             // Gravity.
-            humanoid.ddy += 500.;
+            physics.ddy += 500.;
 
-            let last_y = humanoid.y;
-            update_humanoid_physics_y(humanoid, ft);
-            resolve_humanoid_tile_collision_y(humanoid, last_y, self.world_w, &self.fg_tiles);
-            humanoid.ddy = 0.;
+            update_humanoid_physics_y(base, physics, ft);
+            resolve_humanoid_tile_collision_y(base, physics, self.world_w, &self.fg_tiles);
+            physics.ddy = 0.;
 
-            let last_x = humanoid.x;
-            update_humanoid_physics_x(humanoid, ft);
-            resolve_humanoid_tile_collision_x(humanoid, last_x, self.world_w, &self.fg_tiles);
-            humanoid.ddx = 0.;
+            update_humanoid_physics_x(base, physics, ft);
+            resolve_humanoid_tile_collision_x(base, physics, self.world_w, &self.fg_tiles);
+            physics.ddx = 0.;
         }
 
         // Clamp position (TODO: right-bottom world clamp).
         if let Some(player) = self.humanoids.get(&mut self.player_id) {
             self.viewport_x =
-                ((player.x + player.w / 2.) as usize).saturating_sub(self.viewport_w / 2);
+                ((player.base.x + player.base.w / 2.) as usize).saturating_sub(self.viewport_w / 2);
             self.viewport_y =
-                ((player.y + player.h / 2.) as usize).saturating_sub(self.viewport_h / 2);
+                ((player.base.y + player.base.h / 2.) as usize).saturating_sub(self.viewport_h / 2);
         }
         self.viewport_x = std::cmp::max(2 * TILE_SIZE, self.viewport_x);
         self.viewport_y = std::cmp::max(2 * TILE_SIZE, self.viewport_y);
@@ -604,11 +614,12 @@ fn clone_visible_tile_map(
 fn clone_visible_sprites(game: &mut GameUpdateState) -> Box<[SpriteRenderDesc]> {
     game.humanoids
         .values()
-        .map(|humanoid| SpriteRenderDesc {
-            x: humanoid.x.floor(),
-            y: humanoid.y.floor(),
-            w: humanoid.w,
-            h: humanoid.h,
+        .map(|humanoid| &humanoid.base)
+        .map(|base| SpriteRenderDesc {
+            x: base.x.floor(),
+            y: base.y.floor(),
+            w: base.w,
+            h: base.h,
             u: 0.,
             v: 0.,
         })

@@ -9,6 +9,9 @@ pub struct Connection {
     // Whether the client has joined yet.
     joined: bool,
 
+    // Disconnect flag.
+    disconnect: bool,
+
     // The ID this connection owns.
     id: Option<HumanoidId>,
 }
@@ -72,13 +75,13 @@ impl GameUpdateState {
 
         let mut humanoid_id_counter = HumanoidId::new();
         let mut humanoids = HashMap::new();
-        humanoids.insert(humanoid_id_counter.next(), Humanoid {
+        /*humanoids.insert(humanoid_id_counter.next(), Humanoid {
             x: (100 * TILE_SIZE) as f32,
             y: (85 * TILE_SIZE) as f32,
             w: 32.,
             h: 32.,
             ..Default::default()
-        });
+        });*/
 
         Self {
             net_manager,
@@ -104,24 +107,21 @@ impl GameUpdateState {
     pub fn step(&mut self, _ts: u64, ft: u64) {
         let ft = ft as f32 / 1e6;
         
-        // Humanoid physics stuff.
-        for humanoid in self.humanoids.values_mut() {
-            humanoid.flags &= !(HumanoidFlags::OnGround as u8);
+        // Humanoid physics pass.
+        for Humanoid { base, physics, .. } in self.humanoids.values_mut() {
+            base.flags &= !HUMANOID_ON_GROUND_BIT;
             
             // Gravity.
-            humanoid.ddy += 500.;
+            physics.ddy += 500.;
 
-            let last_y = humanoid.y;
-            update_humanoid_physics_y(humanoid, ft);
-            resolve_humanoid_tile_collision_y(humanoid, last_y, self.world_w, &self.fg_tiles);
-            humanoid.ddy = 0.;
+            update_humanoid_physics_y(base, physics, ft);
+            resolve_humanoid_tile_collision_y(base, physics, self.world_w, &self.fg_tiles);
+            physics.ddy = 0.;
 
-            let last_x = humanoid.x;
-            update_humanoid_physics_x(humanoid, ft);
-            resolve_humanoid_tile_collision_x(humanoid, last_x, self.world_w, &self.fg_tiles);
-            humanoid.ddx = 0.;
+            update_humanoid_physics_x(base, physics, ft);
+            resolve_humanoid_tile_collision_x(base, physics, self.world_w, &self.fg_tiles);
+            physics.ddx = 0.;
         }
-
     }
 
     pub fn poststep(&mut self, _ts: u64) {
@@ -131,11 +131,19 @@ impl GameUpdateState {
 
         // Da big sink
         for (destination, connection) in self.connections.iter() {
+            if connection.disconnect {
+                //self.net_manager.send_uu()
+                continue;
+            }
+
             if !connection.joined {
                 continue;
             }
             self.net_manager.send_uu(destination, humanoid_se.clone());
         }
+
+        // Clean disconnects.
+        self.connections.retain(|_, con| con.disconnect == false);
 
         // Poll for event sending.
         self.net_manager.poll();
@@ -146,9 +154,19 @@ impl GameUpdateState {
             let source = e.source;
             let bytes = match e.kind {
                 NetEventKind::Data(bytes) => bytes,
-                NetEventKind::Connect => continue,
+                NetEventKind::Connect => {
+                    self.connections.insert(
+                        source,
+                        Connection {
+                            joined: false,
+                            disconnect: false,
+                            id: None,
+                        },
+                    );
+                    continue;
+                },
                 NetEventKind::Disconnect => {
-                    self.connections.remove(&source);
+                    self.connections.get_mut(&source).map(|con| con.disconnect = true);
                     continue;
                 }
             };
@@ -157,7 +175,7 @@ impl GameUpdateState {
             msgs.for_each(|msg| match msg {
                 // Doesn't require a connection.
                 ClientNetMessage::Connect { .. } => {
-                    // Ignore
+                    // Ignore.
                     if self.connections.contains_key(&source) {
                         log!("WARNING: {source:?} already connected: {msg:?}.");
                         return;
@@ -167,14 +185,6 @@ impl GameUpdateState {
                     self.net_manager
                         .send_ru(source, serialize(&[ServerNetMessage::ConnectAccept]));
 
-                    // Push connection.
-                    self.connections.insert(
-                        source,
-                        Connection {
-                            joined: false,
-                            id: None,
-                        },
-                    );
                     log!("{source:?} has connected.");
                 }
 
@@ -184,6 +194,10 @@ impl GameUpdateState {
                         log!("WARNING: {source:?} is not connected: {msg:?}");
                         return;
                     };
+
+                    if connection.disconnect {
+                        return;
+                    }
 
                     match msg {
                         ClientNetMessage::RequestChunk { x, y, seq } => {
@@ -238,15 +252,15 @@ impl GameUpdateState {
                             self.humanoids.insert(
                                 id,
                                 Humanoid {
-                                    x: spawn_x as f32,
-                                    y: spawn_y as f32,
-                                    w: 16.,
-                                    h: 32.,
-                                    dx: 0.,
-                                    dy: 0.,
-                                    ddx: 0.,
-                                    ddy: 0.,
-                                    flags: HumanoidFlags::OnGround as u8,
+                                    base: HumanoidBase {
+                                        x: spawn_x as f32,
+                                        y: spawn_y as f32,
+                                        w: 16.,
+                                        h: 32.,
+                                        flags: HUMANOID_ON_GROUND_BIT,
+                                    },
+                                    physics: HumanoidPhysics::default(),
+                                    ai: HumanoidAI::Player,
                                 },
                             );
 
