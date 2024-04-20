@@ -1,8 +1,8 @@
-use crate::client::{log, GameRenderDesc, SpriteRenderDesc, TileRenderDesc};
+use crate::client::{GameRenderDesc, SpriteRenderDesc, TileRenderDesc};
 use crate::net::{ClientNetManager, NetEventKind};
 use crate::shared::*;
 use crate::shared::{Tile, TILE_LIGHT_PROPERTIES, TILE_SIZE};
-use crate::InputEvent;
+use crate::window::InputEvent;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -187,7 +187,7 @@ impl GameUpdateState {
         }
     }
 
-    pub fn prestep<'a>(&mut self, ts: u64, input_events: impl Iterator<Item = InputEvent>) -> bool {
+    pub fn prestep(&mut self, ts: u64, input_events: impl Iterator<Item = InputEvent>) -> bool {
         // Shift all input queues.
         let shift = |queue: &mut _| *queue = *queue << 1 | *queue & 1;
         shift(&mut self.right_queue);
@@ -216,58 +216,24 @@ impl GameUpdateState {
 
         // Player state stuff.
         if let Some(player) = self.humanoids.get_mut(&self.player_id) {
+            player.input = HumanoidInput {
+                jump_queue: self.jump_queue as u8,
+                left_queue: self.left_queue as u8,
+                right_queue: self.right_queue as u8,
+            };
         }
 
         // Humanoid AI pass.
-        for Humanoid { base, physics, ai } in self.humanoids.values_mut() {
-            match ai {
-                HumanoidAI::Player => {
-                    if self.right_queue & 1 != 0 {
-                        physics.ddx += 1500.;
-                    }
-                    if self.left_queue & 1 != 0 {
-                        physics.ddx -= 1500.;
-                    }
-
-                    // Check if jump was pressed at all during the last 3 frames.
-                    let jump_buffer = (0..3)
-                        .into_iter()
-                        .map(|i| self.jump_queue >> i & 0b11 == 0b01)
-                        .reduce(|b, acc| acc | b)
-                        .unwrap();
-
-                    if jump_buffer && base.flags & HUMANOID_ON_GROUND_BIT != 0 {
-                        physics.dy -= 300.;
-                    }
-
-                    // World's best friction.
-                    physics.dx *= 0.80;
-                    if physics.dx.abs() < 0.5 {
-                        physics.dx = 0.;
-                    } 
-                }
-
-                HumanoidAI::Zombie => {
-                    // grr zombie
-                }
-            }
-        }
+        update_humanoid_ais(&mut self.humanoids, self.world_w, &self.fg_tiles);
+        
+        // Humanoid input pass.
+        update_humanoid_inputs(&mut self.humanoids);
 
         // Humanoid physics pass.
-        for Humanoid { base, physics, .. } in self.humanoids.values_mut() {
-            base.flags &= !HUMANOID_ON_GROUND_BIT;
-            
-            // Gravity.
-            physics.ddy += 500.;
+        update_humanoid_physics(&mut self.humanoids, ft);
 
-            update_humanoid_physics_y(base, physics, ft);
-            resolve_humanoid_tile_collision_y(base, physics, self.world_w, &self.fg_tiles);
-            physics.ddy = 0.;
-
-            update_humanoid_physics_x(base, physics, ft);
-            resolve_humanoid_tile_collision_x(base, physics, self.world_w, &self.fg_tiles);
-            physics.ddx = 0.;
-        }
+        // Humanoid tile collision pass.
+        resolve_humanoid_tile_collisions(&mut self.humanoids, self.world_w, &self.fg_tiles);
 
         // Clamp position (TODO: right-bottom world clamp).
         if let Some(player) = self.humanoids.get(&mut self.player_id) {
@@ -515,7 +481,6 @@ fn calculate_light_map(
     let y2 = (game.viewport_y + game.viewport_h + 15) / 16 + LIGHT_MAX as usize;
     let (w, h) = (x2 - x1, y2 - y1);
 
-    use crate::light::*;
     let mut r_channel = create_light_map_base(w, h);
     let mut g_channel = create_light_map_base(w, h);
     let mut b_channel = create_light_map_base(w, h);

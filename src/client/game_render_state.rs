@@ -1,5 +1,5 @@
 use crate::client::{GameRenderDesc, SpriteRenderDesc};
-use crate::window::{InputEvent, Window};
+use crate::{InputEvent, Window};
 use futures::executor::block_on;
 use nalgebra_glm::*;
 use std::path::Path;

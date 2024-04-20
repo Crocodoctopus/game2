@@ -84,11 +84,5 @@ impl Server {
                 self.update_n = 0;
             }
         }
-
-        std::process::exit(0);
-    }
-
-    pub fn update_once(&mut self) {
-        let _frametime = 16666_u64;
     }
 }

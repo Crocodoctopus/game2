@@ -107,21 +107,17 @@ impl GameUpdateState {
     pub fn step(&mut self, _ts: u64, ft: u64) {
         let ft = ft as f32 / 1e6;
         
+        // Humanoid AI pass.
+        update_humanoid_ais(&mut self.humanoids, self.world_w, &self.fg_tiles);
+
+        // Humanoid input pass.
+        update_humanoid_inputs(&mut self.humanoids);
+
         // Humanoid physics pass.
-        for Humanoid { base, physics, .. } in self.humanoids.values_mut() {
-            base.flags &= !HUMANOID_ON_GROUND_BIT;
-            
-            // Gravity.
-            physics.ddy += 500.;
+        update_humanoid_physics(&mut self.humanoids, ft);
 
-            update_humanoid_physics_y(base, physics, ft);
-            resolve_humanoid_tile_collision_y(base, physics, self.world_w, &self.fg_tiles);
-            physics.ddy = 0.;
-
-            update_humanoid_physics_x(base, physics, ft);
-            resolve_humanoid_tile_collision_x(base, physics, self.world_w, &self.fg_tiles);
-            physics.ddx = 0.;
-        }
+        // Humanoid tile collision pass.
+        resolve_humanoid_tile_collisions(&mut self.humanoids, self.world_w, &self.fg_tiles);
     }
 
     pub fn poststep(&mut self, _ts: u64) {
@@ -164,9 +160,11 @@ impl GameUpdateState {
                         },
                     );
                     continue;
-                },
+                }
                 NetEventKind::Disconnect => {
-                    self.connections.get_mut(&source).map(|con| con.disconnect = true);
+                    self.connections
+                        .get_mut(&source)
+                        .map(|con| con.disconnect = true);
                     continue;
                 }
             };
@@ -255,12 +253,13 @@ impl GameUpdateState {
                                     base: HumanoidBase {
                                         x: spawn_x as f32,
                                         y: spawn_y as f32,
-                                        w: 16.,
-                                        h: 32.,
+                                        w: 32. - 8.,
+                                        h: 48. - 8.,
                                         flags: HUMANOID_ON_GROUND_BIT,
                                     },
+                                    ai: HumanoidAi::Player,
+                                    input: HumanoidInput::default(),
                                     physics: HumanoidPhysics::default(),
-                                    ai: HumanoidAI::Player,
                                 },
                             );
 

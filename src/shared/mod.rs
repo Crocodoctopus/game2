@@ -1,9 +1,12 @@
-pub mod humanoid;
-pub mod light;
-pub mod net;
-pub mod tile;
+//mod collision;
+mod humanoid;
+mod input;
+mod light;
+mod net;
+mod tile;
 
 pub use humanoid::*;
+pub use input::*;
 pub use light::*;
 pub use net::*;
 pub use tile::*;
