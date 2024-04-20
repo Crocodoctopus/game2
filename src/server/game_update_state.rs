@@ -75,13 +75,24 @@ impl GameUpdateState {
 
         let mut humanoid_id_counter = HumanoidId::new();
         let mut humanoids = HashMap::new();
-        /*humanoids.insert(humanoid_id_counter.next(), Humanoid {
-            x: (100 * TILE_SIZE) as f32,
-            y: (85 * TILE_SIZE) as f32,
-            w: 32.,
-            h: 32.,
-            ..Default::default()
-        });*/
+        let spawn_x = 100 * TILE_SIZE;
+        let spawn_y = 100 * TILE_SIZE - 32;
+
+        humanoids.insert(
+            humanoid_id_counter.next(),
+            Humanoid {
+                base: HumanoidBase {
+                    x: spawn_x as f32 + 256.,
+                    y: spawn_y as f32,
+                    w: 32. - 8.,
+                    h: 48. - 8.,
+                    flags: 0,
+                },
+                ai: HumanoidAi::Zombie { target: None },
+                input: HumanoidInput::default(),
+                physics: HumanoidPhysics::default(),
+            },
+        );
 
         Self {
             net_manager,
@@ -106,7 +117,7 @@ impl GameUpdateState {
 
     pub fn step(&mut self, _ts: u64, ft: u64) {
         let ft = ft as f32 / 1e6;
-        
+
         // Humanoid AI pass.
         update_humanoid_ais(&mut self.humanoids, self.world_w, &self.fg_tiles);
 

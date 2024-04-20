@@ -225,7 +225,7 @@ impl GameUpdateState {
 
         // Humanoid AI pass.
         update_humanoid_ais(&mut self.humanoids, self.world_w, &self.fg_tiles);
-        
+
         // Humanoid input pass.
         update_humanoid_inputs(&mut self.humanoids);
 

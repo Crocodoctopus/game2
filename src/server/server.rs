@@ -34,7 +34,8 @@ impl Server {
     }
 
     pub fn run(mut self) -> ! {
-        let frametime = 33333_u64;
+        let frametime = 33_332_u64;
+        //let frametime = 16_666_u64;
 
         //
         loop {

@@ -69,29 +69,55 @@ pub fn update_humanoid_ais(
     tiles: &Box<[Tile]>,
 ) {
     // Clone bases because #rust
-    /*let bases = humanoids.iter().map(|(id, humanoids)| (id, humanoids.base)).collect();
-    for Humanoid { base, ai, input, .. } in humanoids.values_mut() {
+    let cpy: HashMap<HumanoidId, (HumanoidBase, HumanoidAi)> = humanoids
+        .iter()
+        .map(|(id, humanoids)| (*id, (humanoids.base.clone(), humanoids.ai.clone())))
+        .collect();
+    for Humanoid {
+        base, ai, input, ..
+    } in humanoids.values_mut()
+    {
         match ai {
             // Player is special.
-            HumanoidAi::Player => { },
+            HumanoidAi::Player => {}
 
             //
-            HumanoidAi::Zombie{ target, detect_range, attack_range } => {
+            HumanoidAi::Zombie { mut target } => {
                 // Update target.
                 {
                     // Get all targets in range.
-                    let targets = col_sys.get_collisions(detect_range);
+                    let mut distance = f32::INFINITY;
+                    target = None;
+                    for (id, (base2, ai2)) in &cpy {
+                        if matches!(ai2, HumanoidAi::Player) {
+                            let dx = base2.x - base.x;
+                            let dy = base2.y - base.y;
+                            let rr = dx * dx + dy * dy;
+                            if rr < distance {
+                                distance = rr;
+                                target = Some(*id);
+                            }
+                        }
+                    }
+                    //let targets = col_sys.get_collisions(detect_range);
 
                     //
-                    if !targets.cotains(target) {
+                    /*if !targets.cotains(target) {
                         target = targets.first();
-                    }
+                    }*/
                 }
 
                 match target {
                     // Seek.
                     Some(target) => {
                         // Move towards target.
+                        let target_base = &cpy[&target].0;
+                        if target_base.x > base.x {
+                            input.right_queue |= 1;
+                        }
+                        if target_base.x < base.x {
+                            input.left_queue |= 1;
+                        }
 
                         // Jump is over a pit and target is higher in elevation.
 
@@ -113,7 +139,7 @@ pub fn update_humanoid_ais(
                 }
             }
         }
-    }*/
+    }
 }
 
 pub fn update_humanoid_inputs(humanoids: &mut HashMap<HumanoidId, Humanoid>) {
@@ -124,11 +150,12 @@ pub fn update_humanoid_inputs(humanoids: &mut HashMap<HumanoidId, Humanoid>) {
         ..
     } in humanoids.values_mut()
     {
-        if input.right_queue & 1 != 0 {
+        if input.right_queue & 1 != 0 && physics.dx < 150. {
             physics.ddx += 1500.;
-        }
-        if input.left_queue & 1 != 0 {
+        } else if input.left_queue & 1 != 0 && physics.dx > -150. {
             physics.ddx -= 1500.;
+        } else {
+            physics.ddx = -physics.dx.signum() * 500.;
         }
 
         // Check if jump was pressed at all during the last 3 frames.
@@ -142,17 +169,10 @@ pub fn update_humanoid_inputs(humanoids: &mut HashMap<HumanoidId, Humanoid>) {
             physics.dy -= 300.;
         }
 
-        // World's best friction.
-        physics.dx *= 0.80;
-        if physics.dx.abs() < 0.5 {
-            physics.dx = 0.;
-        }
-
         // Advance input.
-        let shift = |queue: &mut _| *queue = *queue << 1 | *queue & 1;
-        shift(&mut input.right_queue);
-        shift(&mut input.left_queue);
-        shift(&mut input.jump_queue);
+        input.right_queue <<= 1;
+        input.left_queue <<= 1;
+        input.jump_queue <<= 1;
     }
 }
 
@@ -163,8 +183,6 @@ pub fn update_humanoid_physics(humanoids: &mut HashMap<HumanoidId, Humanoid>, ft
         ..
     } in humanoids.values_mut()
     {
-        base.flags &= !HUMANOID_ON_GROUND_BIT;
-
         // Gravity.
         physics.ddy += 500.;
 
@@ -187,6 +205,7 @@ pub fn resolve_humanoid_tile_collisions(
         ..
     } in humanoids.values_mut()
     {
+        base.flags &= !HUMANOID_ON_GROUND_BIT; 
         resolve_humanoid_tile_collision_x(base, physics, stride, tiles);
         resolve_humanoid_tile_collision_y(base, physics, stride, tiles);
     }
@@ -224,7 +243,7 @@ pub struct HumanoidPhysics {
 #[derive(Clone, Debug, Encode, Decode)]
 pub enum HumanoidAi {
     Player,
-    Zombie,
+    Zombie { target: Option<HumanoidId> },
 }
 
 pub struct HumanoidAnimation {}
@@ -233,6 +252,45 @@ pub fn update_humanoid_physics_x(base: &mut HumanoidBase, physics: &mut Humanoid
     physics.last_x = base.x;
     base.x += 0.5 * physics.ddx * ft * ft + physics.dx * ft;
     physics.dx += physics.ddx * ft;
+}
+
+#[test]
+fn physics_test() {
+    let dt0 = 16_666 as f32 / 1e6;
+    let dt1 = 33_332 as f32 / 1e6;
+
+    let mut base0 = HumanoidBase {
+        x: 0.,
+        y: 0.,
+        w: 0.,
+        h: 0.,
+        flags: 0,
+    };
+    let mut physics0 = HumanoidPhysics {
+        dx: 15.,
+        dy: 10.,
+        ddx: 90.,
+        ddy: 200.,
+        ..Default::default()
+    };
+
+    let mut base1 = base0.clone();
+    let mut physics1 = physics0.clone();
+
+    update_humanoid_physics_x(&mut base0, &mut physics0, dt0);
+    update_humanoid_physics_y(&mut base0, &mut physics0, dt0);
+    update_humanoid_physics_x(&mut base0, &mut physics0, dt0);
+    update_humanoid_physics_y(&mut base0, &mut physics0, dt0);
+    
+    update_humanoid_physics_x(&mut base1, &mut physics1, dt1);
+    update_humanoid_physics_y(&mut base1, &mut physics1, dt1);
+    
+    assert_eq!(base0.x, base1.x);
+    assert_eq!(base0.y, base1.y);
+    assert_eq!(physics0.dx, physics1.dx);
+    assert_eq!(physics0.dy, physics1.dx);
+    assert_eq!(physics0.ddx, physics1.ddx);
+    assert_eq!(physics0.ddy, physics1.ddy);
 }
 
 pub fn resolve_humanoid_tile_collision_x(
