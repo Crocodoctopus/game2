@@ -72,6 +72,12 @@ impl GameUpdateState {
                 bg_tiles[index] = Tile::DenseStone;
             }
         }
+        fg_tiles[108 + 102 * world_w] = Tile::None;
+        fg_tiles[109 + 102 * world_w] = Tile::None;
+        fg_tiles[107 + 102 * world_w] = Tile::None;
+        fg_tiles[106 + 102 * world_w] = Tile::None;
+        fg_tiles[107 + 103 * world_w] = Tile::None;
+        fg_tiles[106 + 103 * world_w] = Tile::None;
 
         let mut humanoid_id_counter = HumanoidId::new();
         let mut humanoids = HashMap::new();
@@ -88,9 +94,12 @@ impl GameUpdateState {
                     h: 48. - 8.,
                     flags: 0,
                 },
-                ai: HumanoidAi::Zombie { target: None },
+                ai: HumanoidAi::Zombie,
                 input: HumanoidInput::default(),
-                physics: HumanoidPhysics::default(),
+                physics: HumanoidPhysics {
+                    max_dx: 50.,
+                    ..Default::default()
+                },
             },
         );
 
@@ -270,7 +279,10 @@ impl GameUpdateState {
                                     },
                                     ai: HumanoidAi::Player,
                                     input: HumanoidInput::default(),
-                                    physics: HumanoidPhysics::default(),
+                                    physics: HumanoidPhysics {
+                                        max_dx: 120.,
+                                        ..Default::default()
+                                    },
                                 },
                             );
 

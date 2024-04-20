@@ -82,59 +82,63 @@ pub fn update_humanoid_ais(
             HumanoidAi::Player => {}
 
             //
-            HumanoidAi::Zombie { mut target } => {
-                // Update target.
-                {
-                    // Get all targets in range.
-                    let mut distance = f32::INFINITY;
-                    target = None;
-                    for (id, (base2, ai2)) in &cpy {
-                        if matches!(ai2, HumanoidAi::Player) {
-                            let dx = base2.x - base.x;
-                            let dy = base2.y - base.y;
-                            let rr = dx * dx + dy * dy;
-                            if rr < distance {
-                                distance = rr;
-                                target = Some(*id);
-                            }
+            HumanoidAi::Zombie => {
+                // Get closest target.
+                let mut distance = f32::INFINITY;
+                let mut target = None;
+                for (id, (base2, ai2)) in &cpy {
+                    if matches!(ai2, HumanoidAi::Player) {
+                        let dx = base2.x - base.x;
+                        let dy = base2.y - base.y;
+                        let rr = dx * dx + dy * dy;
+                        if rr < distance {
+                            distance = rr;
+                            target = Some(*id);
                         }
                     }
-                    //let targets = col_sys.get_collisions(detect_range);
-
-                    //
-                    /*if !targets.cotains(target) {
-                        target = targets.first();
-                    }*/
                 }
-
-                match target {
-                    // Seek.
-                    Some(target) => {
-                        // Move towards target.
-                        let target_base = &cpy[&target].0;
-                        if target_base.x > base.x {
-                            input.right_queue |= 1;
-                        }
-                        if target_base.x < base.x {
-                            input.left_queue |= 1;
-                        }
-
-                        // Jump is over a pit and target is higher in elevation.
-
-                        // If a wall blocks way, jump.
-
-                        // If stuck (x has not changed for N frames) turn around and force roam for M frames.
+                 
+                if let Some(target) = target {
+                    let target_base = &cpy[&target].0;
+                    
+                    // Move towards target.
+                    let move_right = target_base.x > base.x;
+                    let move_left = target_base.x < base.x;
+                    if move_right {
+                        input.right_queue |= 1;
+                    }
+                    if move_left {
+                        input.left_queue |= 1;
                     }
 
-                    // Roam
-                    None => {
-                        // More forward.
+                    // Jump over pits if target is above.
+                    if (move_left || move_right) && target_base.y <= base.y{
+                        let x = if move_left {
+                            base.x as usize / TILE_SIZE
+                        } else {
+                            (base.x + base.w) as usize / TILE_SIZE - 1
+                        };
+                        let y = (base.y + base.h) as usize / TILE_SIZE;
+                        let t0 = tiles[x + y * stride];
+                        let t1 = tiles[x + 1 + y * stride];
+                        if matches!(t0, Tile::None) && matches!(t1, Tile::None) && base.flags & HUMANOID_ON_GROUND_BIT > 0 {
+                            input.jump_queue |= 1;
+                        }
+                    }
 
-                        // Jump over all pits.
-
-                        // If a wall blocks way, jump.
-
-                        // If stuck (x has not change dfor N frames) turn around.
+                    // Jump if wall.
+                    if move_left || move_right {
+                        let x = if move_left {
+                            (base.x - 1.) as usize / TILE_SIZE
+                        } else {
+                            (base.x + base.w + 1.) as usize / TILE_SIZE
+                        };
+                        let y = (base.y + base.h - 1.) as usize / TILE_SIZE;
+                        let t0 = tiles[x + y * stride];
+                        let t1 = Tile::Dirt; // tiles[x + (y - 1) * stride];
+                        if !matches!(t0, Tile::None) && !matches!(t1, Tile::None) && base.flags & HUMANOID_ON_GROUND_BIT > 0 {
+                            input.jump_queue |= 1;
+                        }
                     }
                 }
             }
@@ -150,12 +154,16 @@ pub fn update_humanoid_inputs(humanoids: &mut HashMap<HumanoidId, Humanoid>) {
         ..
     } in humanoids.values_mut()
     {
-        if input.right_queue & 1 != 0 && physics.dx < 150. {
+        if input.right_queue & 1 != 0 && physics.dx < physics.max_dx {
             physics.ddx += 1500.;
-        } else if input.left_queue & 1 != 0 && physics.dx > -150. {
+        } else if input.left_queue & 1 != 0 && physics.dx > -physics.max_dx {
             physics.ddx -= 1500.;
         } else {
-            physics.ddx = -physics.dx.signum() * 500.;
+            if physics.dx.abs() > 5. {
+                physics.ddx = -physics.dx.signum() * 500.;
+            } else {
+                physics.dx = 0.;
+            }
         }
 
         // Check if jump was pressed at all during the last 3 frames.
@@ -234,6 +242,7 @@ pub struct HumanoidBase {
 pub struct HumanoidPhysics {
     pub last_x: f32,
     pub last_y: f32,
+    pub max_dx: f32,
     pub dx: f32,
     pub dy: f32,
     pub ddx: f32,
@@ -243,7 +252,7 @@ pub struct HumanoidPhysics {
 #[derive(Clone, Debug, Encode, Decode)]
 pub enum HumanoidAi {
     Player,
-    Zombie { target: Option<HumanoidId> },
+    Zombie, 
 }
 
 pub struct HumanoidAnimation {}
