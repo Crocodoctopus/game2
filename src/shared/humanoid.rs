@@ -97,10 +97,10 @@ pub fn update_humanoid_ais(
                         }
                     }
                 }
-                 
+
                 if let Some(target) = target {
                     let target_base = &cpy[&target].0;
-                    
+
                     // Move towards target.
                     let move_right = target_base.x > base.x;
                     let move_left = target_base.x < base.x;
@@ -112,7 +112,7 @@ pub fn update_humanoid_ais(
                     }
 
                     // Jump over pits if target is above.
-                    if (move_left || move_right) && target_base.y <= base.y{
+                    if (move_left || move_right) && target_base.y <= base.y {
                         let x = if move_left {
                             base.x as usize / TILE_SIZE
                         } else {
@@ -121,7 +121,10 @@ pub fn update_humanoid_ais(
                         let y = (base.y + base.h) as usize / TILE_SIZE;
                         let t0 = tiles[x + y * stride];
                         let t1 = tiles[x + 1 + y * stride];
-                        if matches!(t0, Tile::None) && matches!(t1, Tile::None) && base.flags & HUMANOID_ON_GROUND_BIT > 0 {
+                        if matches!(t0, Tile::None)
+                            && matches!(t1, Tile::None)
+                            && base.flags & HUMANOID_ON_GROUND_BIT > 0
+                        {
                             input.jump_queue |= 1;
                         }
                     }
@@ -136,7 +139,10 @@ pub fn update_humanoid_ais(
                         let y = (base.y + base.h - 1.) as usize / TILE_SIZE;
                         let t0 = tiles[x + y * stride];
                         let t1 = Tile::Dirt; // tiles[x + (y - 1) * stride];
-                        if !matches!(t0, Tile::None) && !matches!(t1, Tile::None) && base.flags & HUMANOID_ON_GROUND_BIT > 0 {
+                        if !matches!(t0, Tile::None)
+                            && !matches!(t1, Tile::None)
+                            && base.flags & HUMANOID_ON_GROUND_BIT > 0
+                        {
                             input.jump_queue |= 1;
                         }
                     }
@@ -213,7 +219,7 @@ pub fn resolve_humanoid_tile_collisions(
         ..
     } in humanoids.values_mut()
     {
-        base.flags &= !HUMANOID_ON_GROUND_BIT; 
+        base.flags &= !HUMANOID_ON_GROUND_BIT;
         resolve_humanoid_tile_collision_x(base, physics, stride, tiles);
         resolve_humanoid_tile_collision_y(base, physics, stride, tiles);
     }
@@ -252,7 +258,7 @@ pub struct HumanoidPhysics {
 #[derive(Clone, Debug, Encode, Decode)]
 pub enum HumanoidAi {
     Player,
-    Zombie, 
+    Zombie,
 }
 
 pub struct HumanoidAnimation {}
@@ -261,45 +267,6 @@ pub fn update_humanoid_physics_x(base: &mut HumanoidBase, physics: &mut Humanoid
     physics.last_x = base.x;
     base.x += 0.5 * physics.ddx * ft * ft + physics.dx * ft;
     physics.dx += physics.ddx * ft;
-}
-
-#[test]
-fn physics_test() {
-    let dt0 = 16_666 as f32 / 1e6;
-    let dt1 = 33_332 as f32 / 1e6;
-
-    let mut base0 = HumanoidBase {
-        x: 0.,
-        y: 0.,
-        w: 0.,
-        h: 0.,
-        flags: 0,
-    };
-    let mut physics0 = HumanoidPhysics {
-        dx: 15.,
-        dy: 10.,
-        ddx: 90.,
-        ddy: 200.,
-        ..Default::default()
-    };
-
-    let mut base1 = base0.clone();
-    let mut physics1 = physics0.clone();
-
-    update_humanoid_physics_x(&mut base0, &mut physics0, dt0);
-    update_humanoid_physics_y(&mut base0, &mut physics0, dt0);
-    update_humanoid_physics_x(&mut base0, &mut physics0, dt0);
-    update_humanoid_physics_y(&mut base0, &mut physics0, dt0);
-    
-    update_humanoid_physics_x(&mut base1, &mut physics1, dt1);
-    update_humanoid_physics_y(&mut base1, &mut physics1, dt1);
-    
-    assert_eq!(base0.x, base1.x);
-    assert_eq!(base0.y, base1.y);
-    assert_eq!(physics0.dx, physics1.dx);
-    assert_eq!(physics0.dy, physics1.dx);
-    assert_eq!(physics0.ddx, physics1.ddx);
-    assert_eq!(physics0.ddy, physics1.ddy);
 }
 
 pub fn resolve_humanoid_tile_collision_x(

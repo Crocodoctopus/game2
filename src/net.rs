@@ -25,6 +25,7 @@ pub struct ClientNetManager {
     recv: Receiver<SocketEvent>,
 }
 
+#[allow(dead_code)]
 impl ClientNetManager {
     pub fn new(addr: impl ToSocketAddrs) -> Self {
         let addr = addr.to_socket_addrs().unwrap().next().unwrap();
@@ -81,6 +82,7 @@ pub struct ServerNetManager {
     recv: Receiver<SocketEvent>,
 }
 
+#[allow(dead_code)]
 impl ServerNetManager {
     pub fn new(bind_port: u16) -> (Self, u16) {
         let sock = Socket::bind(("0.0.0.0", bind_port)).unwrap();

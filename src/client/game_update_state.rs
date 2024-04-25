@@ -31,6 +31,10 @@ pub struct GameUpdateState {
     // World.
     time: f32, // 0..1
 
+    // Collision.
+    //detection_group: CollisionGroup<u8, ()>,
+    //damage_group: CollisionGroup<u8, ()>,
+
     // Tiles.
     world_w: usize,
     world_h: usize,
@@ -60,7 +64,7 @@ impl GameUpdateState {
         let mut bg_tiles: Box<[Tile]> = Box::new([]);
 
         let mut player_id = HumanoidId::new();
-        let mut humanoids = HashMap::new();
+        let humanoids = HashMap::new();
 
         // Start join sequence.
         {
@@ -222,9 +226,6 @@ impl GameUpdateState {
                 right_queue: self.right_queue as u8,
             };
         }
-
-        // Humanoid AI pass.
-        update_humanoid_ais(&mut self.humanoids, self.world_w, &self.fg_tiles);
 
         // Humanoid input pass.
         update_humanoid_inputs(&mut self.humanoids);
@@ -448,7 +449,7 @@ fn request_chunks_from_server(game: &mut GameUpdateState) {
         }
     }
 
-    let bytes = serialize(&msgs);
+    let _bytes = serialize(&msgs);
     //log!("{}", bytes.len());
     game.net_manager.send_uu(serialize(&msgs));
 }
