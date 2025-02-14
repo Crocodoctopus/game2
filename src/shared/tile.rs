@@ -16,6 +16,7 @@ pub enum Tile {
     RedTorch,
     GreenTorch,
     BlueTorch,
+    WhiteTorch,
 
     // Last element
     SIZE,
@@ -34,8 +35,8 @@ lazy_static! {
 
 #[derive(Copy, Clone, Debug)]
 pub struct TileLightProperty {
-    pub fade: u8,
-    pub light: (u8, u8, u8),
+    pub fade: Opacity,
+    pub light: (Brightness, Brightness, Brightness),
 }
 
 impl TileLightProperty {
@@ -43,36 +44,40 @@ impl TileLightProperty {
         // Generate default map.
         let mut map = [Self {
             fade: FADE_MIN,
-            light: (0, 0, 0),
+            light: Brightness::clamp3(0, 0, 0),
         }; TILE_COUNT];
 
         // Fill.
         map[Tile::Dirt as usize] = Self {
             fade: FADE_SOLID,
-            light: (0, 0, 0),
+            light: Brightness::clamp3(0, 0, 0),
         };
         map[Tile::Stone as usize] = Self {
             fade: FADE_SOLID,
-            light: (0, 0, 0),
+            light: Brightness::clamp3(0, 0, 0),
         };
         map[Tile::DenseStone as usize] = Self {
             fade: FADE_DENSE,
-            light: (0, 0, 0),
+            light: Brightness::clamp3(0, 0, 0),
         };
         map[Tile::RedTorch as usize] = Self {
             fade: FADE_MIN,
-            light: (LIGHT_MAX - 10, 0, 0),
+            light: Brightness::clamp3(255, 0, 0),
         };
         map[Tile::GreenTorch as usize] = Self {
             fade: FADE_MIN,
-            light: (0, LIGHT_MAX - 10, 0),
+            light: Brightness::clamp3(0, 255, 0),
         };
         map[Tile::BlueTorch as usize] = Self {
             fade: FADE_MIN,
-            light: (0, 0, LIGHT_MAX - 10),
+            light: Brightness::clamp3(0, 0, 255),
+        };
+        map[Tile::WhiteTorch as usize] = Self {
+            fade: FADE_MIN,
+            light: Brightness::clamp3(6, 38, 255),
         };
 
-        return map;
+        map
     }
 }
 

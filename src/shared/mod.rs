@@ -4,6 +4,7 @@ mod input;
 mod light;
 mod net;
 mod tile;
+pub mod tile_damage;
 
 pub use collision::*;
 pub use humanoid::*;

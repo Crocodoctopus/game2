@@ -1,3 +1,4 @@
+use crate::shared::Brightness;
 use crate::shared::Tile;
 
 #[derive(Copy, Clone, Debug)]
@@ -29,9 +30,9 @@ pub struct GameRenderDesc {
     pub light_y: usize,
     pub light_w: usize,
     pub light_h: usize,
-    pub r_channel: Box<[u8]>,
-    pub g_channel: Box<[u8]>,
-    pub b_channel: Box<[u8]>,
+    pub r_channel: Box<[Brightness]>,
+    pub g_channel: Box<[Brightness]>,
+    pub b_channel: Box<[Brightness]>,
 
     // Tile data.
     pub tiles_x: usize,

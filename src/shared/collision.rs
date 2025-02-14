@@ -70,7 +70,7 @@ impl<Group: Default + ColliderGroup, Data: Default> CollisionGroup<Group, Data> 
         Self::default()
     }
 
-    pub fn register(
+    pub fn new_collider(
         &mut self,
         group: Group,
         target: Group,
@@ -89,7 +89,7 @@ impl<Group: Default + ColliderGroup, Data: Default> CollisionGroup<Group, Data> 
         handle
     }
 
-    pub fn unregister(&mut self, handle: ColliderHandle) {
+    pub fn free_collider(&mut self, handle: ColliderHandle) {
         let Some(index) = self.index_map.remove(&handle) else {
             // Handle not in container.
             return;
@@ -102,10 +102,25 @@ impl<Group: Default + ColliderGroup, Data: Default> CollisionGroup<Group, Data> 
         self.data.swap_remove(index as usize);
 
         // Correct the index_map.
-        self.handles
+        if let Some(ix) = self
+            .handles
             .get(index as usize)
             .and_then(|handle| self.index_map.get_mut(handle))
-            .map(|ix| *ix = index);
+        {
+            *ix = index;
+        }
+    }
+
+    pub fn get_collider(&self, handle: ColliderHandle) -> Option<&Data> {
+        let &index = self.index_map.get(&handle)?;
+
+        Some(&self.data[index as usize])
+    }
+
+    pub fn get_collider_mut(&mut self, handle: ColliderHandle) -> Option<&mut Data> {
+        let &index = self.index_map.get(&handle)?;
+
+        Some(&mut self.data[index as usize])
     }
 
     pub fn generate_contact_events(&self) -> HashMap<ColliderHandle, Vec<&Data>> {
@@ -123,7 +138,7 @@ impl<Group: Default + ColliderGroup, Data: Default> CollisionGroup<Group, Data> 
                         if Collider::detect(collider_i, collider_j) {
                             let handle_i = &self.handles[i];
                             let data_j = &self.data[j];
-                            out.entry(*handle_i).or_default().push(&data_j);
+                            out.entry(*handle_i).or_default().push(data_j);
                         }
                     }
                 }
@@ -137,28 +152,28 @@ impl<Group: Default + ColliderGroup, Data: Default> CollisionGroup<Group, Data> 
                         if Collider::detect(collider_i, collider_j) {
                             let handle_j = &self.handles[j];
                             let data_i = &self.data[i];
-                            out.entry(*handle_j).or_default().push(&data_i);
+                            out.entry(*handle_j).or_default().push(data_i);
                         }
                     }
                 }
             }
         }
 
-        return out;
+        out
     }
 }
 
 mod test {
-    
-
     #[test]
     fn collision_test() {
+        use crate::shared::collision::*;
+
         let mut col_sys = CollisionGroup::new();
         let team0hit = 0b0001_u8;
         let team0hurt = 0b0010_u8;
         let team1hit = 0b0100_u8;
         let team1hurt = 0b1000_u8;
-        let hurt0 = col_sys.register(
+        let hurt0 = col_sys.new_collider(
             team0hurt,
             0,
             0,
@@ -168,7 +183,7 @@ mod test {
                 r: 2.,
             },
         );
-        let hurt1 = col_sys.register(
+        let hurt1 = col_sys.new_collider(
             team0hurt,
             0,
             0,
@@ -178,7 +193,7 @@ mod test {
                 r: 2.,
             },
         );
-        let hit0 = col_sys.register(
+        let hit0 = col_sys.new_collider(
             team0hit,
             team1hurt,
             1,
@@ -188,7 +203,7 @@ mod test {
                 r: 2.,
             },
         );
-        let hit1 = col_sys.register(
+        let hit1 = col_sys.new_collider(
             team1hit,
             team0hurt,
             2,
@@ -198,7 +213,7 @@ mod test {
                 r: 2.,
             },
         );
-        let hithurt0 = col_sys.register(
+        let hithurt0 = col_sys.new_collider(
             team1hit | team1hurt,
             team1hurt,
             3,
@@ -208,7 +223,7 @@ mod test {
                 r: 2.,
             },
         );
-        let hithurt1 = col_sys.register(
+        let hithurt1 = col_sys.new_collider(
             team1hit | team1hurt,
             team1hurt,
             4,

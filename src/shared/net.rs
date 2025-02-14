@@ -18,7 +18,9 @@ pub enum ClientNetMessage {
 
     SyncPlayer { player: Humanoid },
 
-    RequestChunk { x: u16, y: u16, seq: u32 },
+    HitTile { index: u32 },
+
+    RequestChunk { x: u16, y: u16 },
 }
 
 #[derive(Clone, Encode, Decode, Debug)]
@@ -43,9 +45,18 @@ pub enum ServerNetMessage {
     ChunkSync {
         x: u16,
         y: u16,
-        seq: u32,
         fg_tiles: [Tile; CHUNK_AREA],
         bg_tiles: [Tile; CHUNK_AREA],
+    },
+
+    TileSync {
+        index: u32,
+        tile: Tile,
+    },
+
+    ItemSpawn {
+        x: u32,
+        y: u32,
     },
 
     HumanoidSync {

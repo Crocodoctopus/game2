@@ -112,7 +112,7 @@ impl EventLoop {
             .run(move |event, _| {
                 // If we're out of events, sleep for 16ms and try agian.
                 if let winit::event::Event::AboutToWait = event {
-                    std::thread::sleep_ms(5);
+                    std::thread::sleep(std::time::Duration::from_millis(5));
                     return;
                 }
 

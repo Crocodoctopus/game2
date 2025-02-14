@@ -1,5 +1,5 @@
 use crossbeam_channel::{Receiver, Sender};
-use laminar::*;
+use laminar::{Packet, Socket, SocketEvent};
 
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Instant;

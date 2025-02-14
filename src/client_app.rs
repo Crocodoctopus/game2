@@ -29,7 +29,7 @@ impl<'a> ClientApp<'a> {
         let event_loop = EventLoop::new(event_loop);
         let window = Window::new(window);
 
-        let (input_send, input_recv) = crossbeam_channel::bounded(100);
+        let (input_send, input_recv) = crossbeam_channel::bounded(10);
 
         // Initialize server.
         let (server, port) = Server::new(root, 0);

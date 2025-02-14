@@ -738,9 +738,9 @@ impl<'a> GameRenderState<'a> {
             .into_iter()
             .flat_map(|i| {
                 [
-                    game_render_desc.r_channel[i],
-                    game_render_desc.g_channel[i],
-                    game_render_desc.b_channel[i],
+                    game_render_desc.r_channel[i].raw(),
+                    game_render_desc.g_channel[i].raw(),
+                    game_render_desc.b_channel[i].raw(),
                     255,
                 ]
             })

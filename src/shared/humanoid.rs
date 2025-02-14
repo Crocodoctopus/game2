@@ -66,19 +66,21 @@ pub fn update_humanoid_ais(
     humanoids: &mut HashMap<HumanoidId, Humanoid>,
     //col_sys: &CollisionSystem,
     stride: usize,
-    tiles: &Box<[Tile]>,
+    tiles: &[Tile],
 ) {
-    // Clone bases because #rust
-    let cpy: HashMap<HumanoidId, (HumanoidBase, HumanoidAi)> = humanoids
+    // Clone all players.
+    let players: HashMap<HumanoidId, Humanoid> = humanoids
         .iter()
-        .map(|(id, humanoids)| (*id, (humanoids.base.clone(), humanoids.ai.clone())))
+        .filter(|(_, humanoid)| matches!(humanoid.ai, HumanoidAi::Player))
+        .map(|(&id, humanoid)| (id, humanoid.clone()))
         .collect();
+
     for Humanoid {
         base, ai, input, ..
     } in humanoids.values_mut()
     {
         match ai {
-            // Player is special.
+            // Ignore players.
             HumanoidAi::Player => {}
 
             //
@@ -86,24 +88,21 @@ pub fn update_humanoid_ais(
                 // Get closest target.
                 let mut distance = f32::INFINITY;
                 let mut target = None;
-                for (id, (base2, ai2)) in &cpy {
-                    if matches!(ai2, HumanoidAi::Player) {
-                        let dx = base2.x - base.x;
-                        let dy = base2.y - base.y;
-                        let rr = dx * dx + dy * dy;
-                        if rr < distance {
-                            distance = rr;
-                            target = Some(*id);
-                        }
+                for (id, player) in &players {
+                    let dx = player.base.x - base.x;
+                    let dy = player.base.y - base.y;
+                    let rr = dx * dx + dy * dy;
+                    if rr < distance {
+                        distance = rr;
+                        target = Some(id);
                     }
                 }
 
-                if let Some(target) = target {
-                    let target_base = &cpy[&target].0;
-
+                //
+                if let Some(player) = target.and_then(|id| players.get(id)) {
                     // Move towards target.
-                    let move_right = target_base.x > base.x;
-                    let move_left = target_base.x < base.x;
+                    let move_right = player.base.x > base.x;
+                    let move_left = player.base.x < base.x;
                     if move_right {
                         input.right_queue |= 1;
                     }
@@ -112,7 +111,7 @@ pub fn update_humanoid_ais(
                     }
 
                     // Jump over pits if target is above.
-                    if (move_left || move_right) && target_base.y <= base.y {
+                    if (move_left || move_right) && player.base.y <= base.y {
                         let x = if move_left {
                             base.x as usize / TILE_SIZE
                         } else {
