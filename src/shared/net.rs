@@ -1,4 +1,5 @@
-use crate::shared::{Humanoid, HumanoidId, Tile, CHUNK_AREA};
+use crate::shared::humanoid::{Humanoid, HumanoidId};
+use crate::shared::tile::{Tile, CHUNK_AREA};
 use bitcode::{decode, encode, Decode, DecodeOwned, Encode};
 use std::collections::HashMap;
 

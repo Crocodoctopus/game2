@@ -1,9 +1,67 @@
-use crate::shared::*;
+use crate::shared::light::*;
 use bitcode::{Decode, Encode};
 use lazy_static::lazy_static;
 
 pub const TILE_SIZE: usize = 16;
 pub const TILE_BORDER_SIZE: usize = 4;
+
+// Chunk.
+pub const CHUNK_SIZE: usize = 8;
+pub const CHUNK_AREA: usize = CHUNK_SIZE * CHUNK_SIZE;
+
+// View.
+pub const CHUNK_LOAD_WIDTH: usize = 10;
+pub const CHUNK_LOAD_HEIGHT: usize = 6;
+
+pub struct TileMap {
+    width: usize,
+    height: usize,
+    pub data: Box<[Tile]>,
+}
+
+impl std::ops::Index<usize> for TileMap {
+    type Output = Tile;
+    fn index(&self, i: usize) -> &Self::Output {
+        &self.data[i]
+    }
+}
+
+impl std::ops::IndexMut<usize> for TileMap {
+    fn index_mut(&mut self, i: usize) -> &mut Self::Output {
+        &mut self.data[i]
+    }
+}
+
+impl std::ops::Index<(usize, usize)> for TileMap {
+    type Output = Tile;
+    fn index(&self, (x, y): (usize, usize)) -> &Self::Output {
+        &self.data[x + y * self.width]
+    }
+}
+
+impl std::ops::IndexMut<(usize, usize)> for TileMap {
+    fn index_mut(&mut self, (x, y): (usize, usize)) -> &mut Self::Output {
+        &mut self.data[x + y * self.width]
+    }
+}
+
+impl TileMap {
+    pub fn from_data(width: usize, height: usize, data: Box<[Tile]>) -> Self {
+        Self {
+            width,
+            height,
+            data,
+        }
+    }
+
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    pub fn height(&self) -> usize {
+        self.height
+    }
+}
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Encode, Decode)]

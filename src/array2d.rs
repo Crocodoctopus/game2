@@ -4,28 +4,24 @@ use std::ops::{Index, IndexMut, Range};
 pub trait Index2d: Index<usize> + Index<(usize, usize)> {
     type Item;
 
-    fn get(&self, index: usize) -> Option<&Self::Item>;
-    fn get_2d(&self, x: usize, y: usize) -> Option<&Self::Item>;
-    fn get_mut(&mut self, index: usize) -> Option<&mut Self::Item>;
-    fn get_mut_2d(&mut self, x: usize, y: usize) -> Option<&mut Self::Item>;
-    fn get_wrapping_2d(&self, x: usize, y: usize) -> &Self::Item;
-    fn get_wrapping_mut_2d(&self, x: usize, y: usize) -> &mut Self::Item;
-
+    fn get(&self, x: usize, y: usize) -> Option<&Self::Item>;
+    fn get_from_index(&self, index: usize) -> Option<&Self::Item>;
+    fn get_wrapping(&self, x: usize, y: usize) -> &Self::Item;
     fn contains(&self, xr: Range<usize>, yr: Range<usize>) -> bool;
-    fn splice_wrapping(&mut self, xr: Range<usize>, yr: Range<usize>, data: impl Index2d);
     fn for_each(&self, f: impl FnMut(usize, usize, &Self::Item));
-    fn for_each_mut(&mut self, f: impl FnMut(usize, usize, &mut Self::Item));
     fn for_each_sub(&self, xr: Range<usize>, yr: Range<usize>, f: impl FnMut(usize, usize, &Self::Item));
-    fn for_each_sub_mut(&mut self, xr: Range<usize>, yr: Range<usize>, f: impl FnMut(usize, usize, &mut Self::Item));
-    fn for_each_sub_wrapping
-    fn for_each_sub_wrapping_mut
-    fn clone
-    fn clone_sub
-    fn clone_sub_wrapping
+    fn for_each_sub_wrapping(&self, xr: Range<usize>, yr: Range<usize>, f: impl FnMut(usize, usize, &Self::Item));
 }
 
-
-pub trait Index2dMut<T>: Index2d<T> + IndexMut<T> {}
+#[rustfmt::skip]
+pub trait Index2dMut<T>: Index2d<T> + IndexMut<T> {
+    fn get_mut(&mut self, x: usize, y: usize) -> Option<&mut Self::Item>;
+    fn get_from_index_mut(&mut self, index: usize) -> Option<&mut Self::Item>;
+    fn get_wrapping_mut(&mut self, x: usize, y: usize) -> &mut Self::Item;
+    fn for_each_mut(&mut self, f: impl FnMut(usize, usize, &mut Self::Item));
+    fn for_each_sub_mut(&mut self, xr: Range<usize>, yr: Range<usize>, f: impl FnMut(usize, usize, &mut Self::Item));
+    fn for_each_sub_wrapping_mut(&mut self, xr: Range<usize>, yr: Range<usize>, f: impl FnMut(usize, usize, &mut Self::Item));
+}
 
 #[inline(always)]
 pub fn for_each_sub_wrapping(

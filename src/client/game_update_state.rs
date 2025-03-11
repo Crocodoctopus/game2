@@ -1,7 +1,9 @@
 use crate::client::{log, GameRenderDesc, SpriteRenderDesc, TileRenderDesc};
 use crate::net::{ClientNetManager, NetEventKind};
-use crate::shared::*;
-use crate::shared::{Tile, TILE_LIGHT_PROPERTIES, TILE_SIZE};
+use crate::shared::humanoid::*;
+use crate::shared::light::*;
+use crate::shared::net::*;
+use crate::shared::tile::*;
 use crate::window::InputEvent;
 use std::collections::HashMap;
 use std::path::Path;
@@ -37,11 +39,9 @@ pub struct GameUpdateState {
     //damage_group: CollisionGroup<u8, ()>,
 
     // Tiles.
-    world_w: usize,
-    world_h: usize,
     chunks_loaded: Box<[bool]>,
-    fg_tiles: Box<[Tile]>,
-    bg_tiles: Box<[Tile]>,
+    fg_tiles: TileMap,
+    bg_tiles: TileMap,
 
     // Humanoids.
     player_id: HumanoidId,
@@ -177,11 +177,9 @@ impl GameUpdateState {
             time: 0.5,
 
             // Tiles.
-            world_w,
-            world_h,
             chunks_loaded,
-            fg_tiles,
-            bg_tiles,
+            fg_tiles: TileMap::from_data(world_w, world_h, fg_tiles),
+            bg_tiles: TileMap::from_data(world_w, world_h, bg_tiles),
 
             // Humanoids.
             player_id,
@@ -226,18 +224,15 @@ impl GameUpdateState {
         // Humanoid input pass.
         update_humanoid_inputs(&mut self.humanoids);
 
-        // Humanoid physics pass.
-        update_humanoid_physics(&mut self.humanoids, frametime);
-
-        // Humanoid tile collision pass.
-        resolve_humanoid_tile_collisions(&mut self.humanoids, self.world_w, &self.fg_tiles);
+        // Humanoid physics and collision pass.
+        update_humanoid_physics(&mut self.humanoids, frametime, &self.fg_tiles);
 
         // Clamp position (TODO: right-bottom world clamp).
         if let Some(player) = self.humanoids.get(&self.player_id) {
-            self.viewport_x =
-                ((player.base.x + player.base.w / 2.) as usize).saturating_sub(self.viewport_w / 2);
-            self.viewport_y =
-                ((player.base.y + player.base.h / 2.) as usize).saturating_sub(self.viewport_h / 2);
+            self.viewport_x = ((player.bounds.x + player.bounds.width / 2.) as usize)
+                .saturating_sub(self.viewport_w / 2);
+            self.viewport_y = ((player.bounds.y + player.bounds.height / 2.) as usize)
+                .saturating_sub(self.viewport_h / 2);
         }
         self.viewport_x = std::cmp::max(2 * TILE_SIZE, self.viewport_x);
         self.viewport_y = std::cmp::max(2 * TILE_SIZE, self.viewport_y);
@@ -247,7 +242,7 @@ impl GameUpdateState {
         // Temp.
         if self.use_queue & 0b11 == 0b01 {
             let bytes = serialize(&[ClientNetMessage::HitTile {
-                index: (self.mouse_x / 16 + self.mouse_y / 16 * self.world_w) as u32,
+                index: (self.mouse_x / 16 + self.mouse_y / 16 * self.fg_tiles.width()) as u32,
             }]);
             self.net_manager.send_ru(bytes);
         }
@@ -324,7 +319,7 @@ impl GameUpdateState {
                                         let src_index = x + y * CHUNK_SIZE;
                                         let dst_index = x
                                             + cx * CHUNK_SIZE
-                                            + (y + cy * CHUNK_SIZE) * self.world_w;
+                                            + (y + cy * CHUNK_SIZE) * self.fg_tiles.width();
                                         self.fg_tiles[dst_index] = fg_tiles[src_index];
                                         self.bg_tiles[dst_index] = bg_tiles[src_index];
                                     }
@@ -390,19 +385,23 @@ impl GameUpdateState {
                         'a' | 'A' => self.left_queue = self.left_queue & !1 | bit,
                         ' ' => self.jump_queue = self.jump_queue & !1 | bit,
                         '1' if bit == 1 => {
-                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
+                            let index =
+                                self.mouse_x / 16 + self.mouse_y / 16 * self.fg_tiles.width();
                             self.fg_tiles[index] = Tile::RedTorch;
                         }
                         '2' if bit == 1 => {
-                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
+                            let index =
+                                self.mouse_x / 16 + self.mouse_y / 16 * self.fg_tiles.width();
                             self.fg_tiles[index] = Tile::GreenTorch;
                         }
                         '3' if bit == 1 => {
-                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
+                            let index =
+                                self.mouse_x / 16 + self.mouse_y / 16 * self.fg_tiles.width();
                             self.fg_tiles[index] = Tile::BlueTorch;
                         }
                         '4' if bit == 1 => {
-                            let index = self.mouse_x / 16 + self.mouse_y / 16 * self.world_w;
+                            let index =
+                                self.mouse_x / 16 + self.mouse_y / 16 * self.fg_tiles.width();
                             self.fg_tiles[index] = Tile::WhiteTorch;
                         }
                         _ => {}
@@ -453,7 +452,7 @@ fn request_chunks_from_server(game: &mut GameUpdateState) {
     let mut msgs = vec![];
     for y in y1..y2 {
         for x in x1..x2 {
-            let index = x + y * game.world_w / CHUNK_SIZE;
+            let index = x + y * game.fg_tiles.width() / CHUNK_SIZE;
             if !game.chunks_loaded[index] {
                 game.chunks_loaded[index] = true;
                 msgs.push(ClientNetMessage::RequestChunk {
@@ -492,7 +491,7 @@ fn calculate_light_map(game: &mut GameUpdateState) -> (usize, usize, Lightmap, L
     let mut b_probes = Vec::with_capacity(1024);
     for y in 1..h - 1 {
         for x in 1..w - 1 {
-            let world_index = (x + x1) + (y + y1) * game.world_w;
+            let world_index = (x + x1) + (y + y1) * game.fg_tiles.width();
             let light_index = x + y * w;
 
             let fg_tile = game.fg_tiles[world_index];
@@ -568,7 +567,7 @@ fn clone_visible_tile_map(
     let h = y2 - y1;
     for y in 0..h {
         for x in 0..w {
-            let src_index = (x + x1) + (y + y1) * game.world_w;
+            let src_index = (x + x1) + (y + y1) * game.fg_tiles.width();
             let dst_index = x + y * w;
             fg_tiles[dst_index] = TileRenderDesc(game.fg_tiles[src_index]);
             bg_tiles[dst_index] = TileRenderDesc(game.bg_tiles[src_index]);
@@ -580,12 +579,12 @@ fn clone_visible_tile_map(
 fn clone_visible_sprites(game: &mut GameUpdateState) -> Box<[SpriteRenderDesc]> {
     game.humanoids
         .values()
-        .map(|humanoid| &humanoid.base)
-        .map(|base| SpriteRenderDesc {
-            x: base.x.floor(),
-            y: base.y.floor(),
-            w: base.w,
-            h: base.h,
+        .map(|humanoid| &humanoid.bounds)
+        .map(|bounds| SpriteRenderDesc {
+            x: bounds.x.floor(),
+            y: bounds.y.floor(),
+            w: bounds.width,
+            h: bounds.height,
             u: 0.,
             v: 0.,
         })

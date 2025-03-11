@@ -1,4 +1,5 @@
 use crate::client::{GameRenderDesc, SpriteRenderDesc};
+use crate::shared::tile::*;
 use crate::{InputEvent, Window};
 use futures::executor::block_on;
 use nalgebra_glm::*;
@@ -843,7 +844,7 @@ impl<'a> GameRenderState<'a> {
         let mut bg_vertex_tiles = Vec::with_capacity(4 * max_tiles);
         if max_tiles > 0 {
             // Calculate tile data and upload to GPU.
-            let tile_texture_properties_lookup = &crate::shared::TILE_TEXTURE_PROPERTIES;
+            let tile_texture_properties_lookup = &TILE_TEXTURE_PROPERTIES;
             let stride = game_render_desc.tiles_w;
             'calc_tiles: {
                 for y in 1..game_render_desc.tiles_h - 1 {

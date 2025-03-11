@@ -1,6 +1,12 @@
 use crate::net::{NetEventKind, ServerNetManager};
 use crate::server::log;
-use crate::shared::*;
+use crate::shared::humanoid::*;
+use crate::shared::misc::Aabb;
+use crate::shared::net::*;
+use crate::shared::physics::*;
+use crate::shared::tile::*;
+use crate::shared::tile_collision::*;
+use crate::shared::tile_damage::*;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -23,11 +29,9 @@ pub struct GameUpdateState {
     connections: HashMap<SocketAddr, Connection>,
 
     // Tiles.
-    world_w: usize,
-    world_h: usize,
-    fg_tiles: Box<[Tile]>,
-    bg_tiles: Box<[Tile]>,
-    tile_damages: HashMap<u32, tile_damage::TileDamage>,
+    fg_tiles: TileMap,
+    bg_tiles: TileMap,
+    tile_damages: HashMap<u32, TileDamage>,
 
     // Players.
     humanoid_id_counter: HumanoidId,
@@ -84,20 +88,24 @@ impl GameUpdateState {
         let spawn_x = 100 * TILE_SIZE;
         let spawn_y = 100 * TILE_SIZE - 32;
 
+        // Zomble
         humanoids.insert(
             humanoid_id_counter.next(),
             Humanoid {
-                base: HumanoidBase {
+                bounds: Aabb {
                     x: spawn_x as f32 + 256.,
                     y: spawn_y as f32,
-                    w: 32. - 8.,
-                    h: 48. - 8.,
-                    flags: 0,
+                    width: 32. - 8.,
+                    height: 48. - 8.,
                 },
+                last_x: spawn_x as f32 + 256.,
+                last_y: spawn_y as f32,
+                flags: tile_collision_flags::NONE,
                 ai: HumanoidAi::Zombie,
-                input: HumanoidInput::default(),
-                physics: HumanoidPhysics {
-                    max_dx: 50.,
+                input: HumanoidInput {
+                    ..Default::default()
+                },
+                physics: GenericPhysics {
                     ..Default::default()
                 },
             },
@@ -107,10 +115,8 @@ impl GameUpdateState {
             net_manager,
             connections: HashMap::new(),
 
-            world_w,
-            world_h,
-            fg_tiles,
-            bg_tiles,
+            fg_tiles: TileMap::from_data(world_w, world_h, fg_tiles),
+            bg_tiles: TileMap::from_data(world_w, world_h, bg_tiles),
             tile_damages: <_>::default(),
 
             humanoid_id_counter,
@@ -128,19 +134,16 @@ impl GameUpdateState {
         let frametime = frametime as f32 / 1e6;
 
         // Humanoid AI pass.
-        update_humanoid_ais(&mut self.humanoids, self.world_w, &self.fg_tiles);
+        update_humanoid_ais(&mut self.humanoids, &self.fg_tiles);
 
         // Humanoid input pass.
         update_humanoid_inputs(&mut self.humanoids);
 
-        // Humanoid physics pass.
-        update_humanoid_physics(&mut self.humanoids, frametime);
-
-        // Humanoid tile collision pass.
-        resolve_humanoid_tile_collisions(&mut self.humanoids, self.world_w, &self.fg_tiles);
+        // Humanoid physics and collision pass.
+        update_humanoid_physics(&mut self.humanoids, frametime, &self.fg_tiles);
 
         //
-        let destroyed_tiles = tile_damage::update_tile_damages(&mut self.tile_damages, timestamp);
+        let destroyed_tiles = update_tile_damages(&mut self.tile_damages, timestamp);
 
         // Temp tile sync stuff
         {
@@ -254,8 +257,9 @@ impl GameUpdateState {
                             let mut bg_tiles = [Tile::None; CHUNK_AREA];
                             for y in 0..CHUNK_SIZE {
                                 for x in 0..CHUNK_SIZE {
-                                    let src_index =
-                                        x + cx * CHUNK_SIZE + (y + cy * CHUNK_SIZE) * self.world_w;
+                                    let src_index = x
+                                        + cx * CHUNK_SIZE
+                                        + (y + cy * CHUNK_SIZE) * self.fg_tiles.width();
                                     let dst_index = x + y * CHUNK_SIZE;
                                     fg_tiles[dst_index] = self.fg_tiles[src_index];
                                     bg_tiles[dst_index] = self.bg_tiles[src_index];
@@ -289,25 +293,28 @@ impl GameUpdateState {
                             self.humanoids.insert(
                                 id,
                                 Humanoid {
-                                    base: HumanoidBase {
+                                    bounds: Aabb {
                                         x: spawn_x as f32,
                                         y: spawn_y as f32,
-                                        w: 32. - 8.,
-                                        h: 48. - 8.,
-                                        flags: HUMANOID_ON_GROUND_BIT,
+                                        width: 32. - 8.,
+                                        height: 48. - 8.,
                                     },
+                                    last_x: spawn_x as f32,
+                                    last_y: spawn_y as f32,
+                                    flags: tile_collision_flags::NONE,
                                     ai: HumanoidAi::Player,
-                                    input: HumanoidInput::default(),
-                                    physics: HumanoidPhysics {
-                                        max_dx: 120.,
+                                    input: HumanoidInput {
+                                        ..Default::default()
+                                    },
+                                    physics: GenericPhysics {
                                         ..Default::default()
                                     },
                                 },
                             );
 
                             msgs.push(ServerNetMessage::JoinAccept {
-                                width: self.world_w as u16,
-                                height: self.world_h as u16,
+                                width: self.fg_tiles.width() as u16,
+                                height: self.fg_tiles.height() as u16,
                                 id,
                                 spawn_x: 100,
                                 spawn_y: 100,
@@ -323,12 +330,12 @@ impl GameUpdateState {
                             // Send chunk data.
                             for cy in y1..y2 {
                                 for cx in x1..x2 {
-                                    let offset = (cx + cy * self.world_w) * CHUNK_SIZE;
+                                    let offset = (cx + cy * self.fg_tiles.width()) * CHUNK_SIZE;
                                     let mut fg_tiles = [Tile::None; CHUNK_AREA];
                                     let mut bg_tiles = [Tile::None; CHUNK_AREA];
                                     for y in 0..CHUNK_SIZE {
                                         for x in 0..CHUNK_SIZE {
-                                            let src_index = x + y * self.world_w;
+                                            let src_index = x + y * self.fg_tiles.width();
                                             let dst_index = x + y * CHUNK_SIZE;
                                             fg_tiles[dst_index] = self.fg_tiles[src_index + offset];
                                             bg_tiles[dst_index] = self.bg_tiles[src_index + offset];
@@ -372,12 +379,7 @@ impl GameUpdateState {
 
                         ClientNetMessage::HitTile { index } => {
                             let tile = self.fg_tiles[index as usize];
-                            tile_damage::register_tile_hit(
-                                &mut self.tile_damages,
-                                index,
-                                tile,
-                                timestamp,
-                            );
+                            register_tile_hit(&mut self.tile_damages, index, tile, timestamp);
                         }
 
                         ClientNetMessage::Ping => self

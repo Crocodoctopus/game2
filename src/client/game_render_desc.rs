@@ -1,5 +1,5 @@
-use crate::shared::Brightness;
-use crate::shared::Tile;
+use crate::shared::light::Brightness;
+use crate::shared::tile::Tile;
 
 #[derive(Copy, Clone, Debug)]
 pub struct SpriteRenderDesc {

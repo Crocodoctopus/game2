@@ -1,4 +1,4 @@
-use crate::shared::Tile;
+use crate::shared::tile::*;
 use std::collections::HashMap;
 
 pub struct TileDamage {

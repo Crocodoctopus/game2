@@ -1,6 +1,11 @@
-use crate::shared::{Tile, TILE_PHYSICS_PROPERTIES, TILE_SIZE};
+use crate::shared::misc::Aabb;
+use crate::shared::physics::*;
+use crate::shared::tile::*;
+use crate::shared::tile_collision;
+use crate::shared::tile_collision::*;
 use bitcode::{Decode, Encode};
 use std::collections::HashMap;
+use tile_collision_flags::HIT_FLOOR;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default, Encode, Decode, Hash)]
 pub struct HumanoidId(u32);
@@ -56,17 +61,20 @@ impl Humanoids {
 
 #[derive(Clone, Debug, Encode, Decode)]
 pub struct Humanoid {
-    pub base: HumanoidBase,
-    pub ai: HumanoidAi,
+    pub bounds: Aabb,
+    pub last_x: f32,
+    pub last_y: f32,
+    pub flags: TileCollisionFlags,
     pub input: HumanoidInput,
-    pub physics: HumanoidPhysics,
+    pub physics: GenericPhysics,
+    pub ai: HumanoidAi,
+    //pub entity_collider: ColliderHandle,
 }
 
 pub fn update_humanoid_ais(
     humanoids: &mut HashMap<HumanoidId, Humanoid>,
     //col_sys: &CollisionSystem,
-    stride: usize,
-    tiles: &[Tile],
+    tiles: &TileMap,
 ) {
     // Clone all players.
     let players: HashMap<HumanoidId, Humanoid> = humanoids
@@ -75,11 +83,8 @@ pub fn update_humanoid_ais(
         .map(|(&id, humanoid)| (id, humanoid.clone()))
         .collect();
 
-    for Humanoid {
-        base, ai, input, ..
-    } in humanoids.values_mut()
-    {
-        match ai {
+    for humanoid in humanoids.values_mut() {
+        match humanoid.ai {
             // Ignore players.
             HumanoidAi::Player => {}
 
@@ -89,8 +94,8 @@ pub fn update_humanoid_ais(
                 let mut distance = f32::INFINITY;
                 let mut target = None;
                 for (id, player) in &players {
-                    let dx = player.base.x - base.x;
-                    let dy = player.base.y - base.y;
+                    let dx = player.bounds.x - humanoid.bounds.x;
+                    let dy = player.bounds.y - humanoid.bounds.y;
                     let rr = dx * dx + dy * dy;
                     if rr < distance {
                         distance = rr;
@@ -101,48 +106,49 @@ pub fn update_humanoid_ais(
                 //
                 if let Some(player) = target.and_then(|id| players.get(id)) {
                     // Move towards target.
-                    let move_right = player.base.x > base.x;
-                    let move_left = player.base.x < base.x;
+                    let move_right = player.bounds.x > humanoid.bounds.x;
+                    let move_left = player.bounds.x < humanoid.bounds.x;
                     if move_right {
-                        input.right_queue |= 1;
+                        humanoid.input.right_queue |= 1;
                     }
                     if move_left {
-                        input.left_queue |= 1;
+                        humanoid.input.left_queue |= 1;
                     }
 
                     // Jump over pits if target is above.
-                    if (move_left || move_right) && player.base.y <= base.y {
+                    if (move_left || move_right) && player.bounds.y <= humanoid.bounds.y {
                         let x = if move_left {
-                            base.x as usize / TILE_SIZE
+                            humanoid.bounds.x as usize / TILE_SIZE
                         } else {
-                            (base.x + base.w) as usize / TILE_SIZE - 1
+                            (humanoid.bounds.x + humanoid.bounds.width) as usize / TILE_SIZE - 1
                         };
-                        let y = (base.y + base.h) as usize / TILE_SIZE;
-                        let t0 = tiles[x + y * stride];
-                        let t1 = tiles[x + 1 + y * stride];
+                        let y = (humanoid.bounds.y + humanoid.bounds.height) as usize / TILE_SIZE;
+                        let t0 = tiles[(x, y)];
+                        let t1 = tiles[(x + 1, y)];
                         if matches!(t0, Tile::None)
                             && matches!(t1, Tile::None)
-                            && base.flags & HUMANOID_ON_GROUND_BIT > 0
+                            && (humanoid.flags & tile_collision_flags::HIT_FLOOR > 0)
                         {
-                            input.jump_queue |= 1;
+                            humanoid.input.jump_queue |= 1;
                         }
                     }
 
                     // Jump if wall.
                     if move_left || move_right {
                         let x = if move_left {
-                            (base.x - 1.) as usize / TILE_SIZE
+                            (humanoid.bounds.x - 1.) as usize / TILE_SIZE
                         } else {
-                            (base.x + base.w + 1.) as usize / TILE_SIZE
+                            (humanoid.bounds.x + humanoid.bounds.width + 1.) as usize / TILE_SIZE
                         };
-                        let y = (base.y + base.h - 1.) as usize / TILE_SIZE;
-                        let t0 = tiles[x + y * stride];
+                        let y =
+                            (humanoid.bounds.y + humanoid.bounds.height - 1.) as usize / TILE_SIZE;
+                        let t0 = tiles[(x, y)];
                         let t1 = Tile::Dirt; // tiles[x + (y - 1) * stride];
                         if !matches!(t0, Tile::None)
                             && !matches!(t1, Tile::None)
-                            && base.flags & HUMANOID_ON_GROUND_BIT > 0
+                            && (humanoid.flags & tile_collision_flags::HIT_FLOOR > 0)
                         {
-                            input.jump_queue |= 1;
+                            humanoid.input.jump_queue |= 1;
                         }
                     }
                 }
@@ -152,80 +158,97 @@ pub fn update_humanoid_ais(
 }
 
 pub fn update_humanoid_inputs(humanoids: &mut HashMap<HumanoidId, Humanoid>) {
-    for Humanoid {
-        ref mut base,
-        ref mut physics,
-        ref mut input,
-        ..
-    } in humanoids.values_mut()
-    {
-        if input.right_queue & 1 != 0 && physics.dx < physics.max_dx {
-            physics.ddx += 1500.;
-        } else if input.left_queue & 1 != 0 && physics.dx > -physics.max_dx {
-            physics.ddx -= 1500.;
+    for humanoid in humanoids.values_mut() {
+        let max_dx = 150f32;
+        if humanoid.input.right_queue & 1 != 0 && humanoid.physics.dx < max_dx {
+            humanoid.physics.ddx += 1500.;
+        } else if humanoid.input.left_queue & 1 != 0 && humanoid.physics.dx > -max_dx {
+            humanoid.physics.ddx -= 1500.;
         } else {
-            if physics.dx.abs() > 5. {
-                physics.ddx = -physics.dx.signum() * 500.;
+            #[allow(clippy::collapsible_else_if)]
+            if humanoid.physics.dx.abs() > 5. {
+                humanoid.physics.ddx = -humanoid.physics.dx.signum() * 500.;
             } else {
-                physics.dx = 0.;
+                humanoid.physics.dx = 0.;
             }
         }
 
         // Check if jump was pressed at all during the last 3 frames.
         let jump_buffer = (0..3)
-            .into_iter()
-            .map(|i| input.jump_queue >> i & 0b11 == 0b01)
+            .map(|i| humanoid.input.jump_queue >> i & 0b11 == 0b01)
             .reduce(|b, acc| acc | b)
             .unwrap();
 
-        if jump_buffer && base.flags & HUMANOID_ON_GROUND_BIT != 0 {
-            physics.dy -= 300.;
+        if jump_buffer && (humanoid.flags & tile_collision_flags::HIT_FLOOR > 0) {
+            humanoid.physics.dy -= 300.;
         }
 
         // Advance input.
-        input.right_queue <<= 1;
-        input.left_queue <<= 1;
-        input.jump_queue <<= 1;
+        humanoid.input.right_queue <<= 1;
+        humanoid.input.left_queue <<= 1;
+        humanoid.input.jump_queue <<= 1;
     }
 }
 
-pub fn update_humanoid_physics(humanoids: &mut HashMap<HumanoidId, Humanoid>, ft: f32) {
-    for Humanoid {
-        ref mut base,
-        ref mut physics,
-        ..
-    } in humanoids.values_mut()
-    {
-        // Gravity.
-        physics.ddy += 500.;
-
-        update_humanoid_physics_y(base, physics, ft);
-        physics.ddy = 0.;
-
-        update_humanoid_physics_x(base, physics, ft);
-        physics.ddx = 0.;
-    }
-}
-
-pub fn resolve_humanoid_tile_collisions(
+pub fn update_humanoid_physics(
     humanoids: &mut HashMap<HumanoidId, Humanoid>,
-    stride: usize,
-    tiles: &Box<[Tile]>,
+    ft: f32,
+    tiles: &TileMap,
 ) {
-    for Humanoid {
-        ref mut base,
-        ref mut physics,
-        ..
-    } in humanoids.values_mut()
-    {
-        base.flags &= !HUMANOID_ON_GROUND_BIT;
-        resolve_humanoid_tile_collision_x(base, physics, stride, tiles);
-        resolve_humanoid_tile_collision_y(base, physics, stride, tiles);
+    for humanoid in humanoids.values_mut() {
+        // X physics.
+        humanoid.last_x = humanoid.bounds.x;
+        update_generic_physics_x(&mut humanoid.bounds.x, &mut humanoid.physics, ft);
+        humanoid.physics.ddx = 0.;
+
+        // Y physics.
+        humanoid.physics.ddy += 500.;
+        humanoid.last_y = humanoid.bounds.y;
+        update_generic_physics_y(&mut humanoid.bounds.y, &mut humanoid.physics, ft);
+        humanoid.physics.ddy = 0.;
+
+        // X tile collision.
+        resolve_generic_tile_collision_x(
+            humanoid.bounds,
+            humanoid.last_x,
+            humanoid.last_y,
+            tiles,
+            |event, x, _y, _tile| match event {
+                TileCollisionEvent::LeftWall => {
+                    humanoid.bounds.x = ((x + 1) * TILE_SIZE) as f32;
+                    humanoid.physics.dx = 0.;
+                }
+                TileCollisionEvent::RightWall => {
+                    humanoid.bounds.x = (x * TILE_SIZE) as f32 - humanoid.bounds.width;
+                    humanoid.physics.dx = 0.;
+                }
+                TileCollisionEvent::Ceiling | TileCollisionEvent::Floor => unreachable!(),
+            },
+        );
+
+        // Y tile collision.
+        humanoid.flags &= !tile_collision_flags::HIT_FLOOR;
+        resolve_generic_tile_collision_y(
+            humanoid.bounds,
+            humanoid.last_x,
+            humanoid.last_y,
+            tiles,
+            |event, _x, y, _tile| match event {
+                TileCollisionEvent::Floor => {
+                    humanoid.bounds.y = (y * TILE_SIZE) as f32 - humanoid.bounds.height;
+                    humanoid.physics.dy = 0.;
+                    humanoid.flags |= tile_collision_flags::HIT_FLOOR;
+                }
+                TileCollisionEvent::Ceiling => {
+                    humanoid.bounds.y = ((y + 1) * TILE_SIZE) as f32;
+                    humanoid.physics.dy *= 0.5;
+                    humanoid.flags |= tile_collision_flags::HIT_CEILING;
+                }
+                TileCollisionEvent::LeftWall | TileCollisionEvent::RightWall => unreachable!(),
+            },
+        );
     }
 }
-
-pub type HumanoidFlags = u8;
-pub const HUMANOID_ON_GROUND_BIT: u8 = 1 << 1;
 
 #[derive(Clone, Debug, Default, Encode, Decode)]
 pub struct HumanoidInput {
@@ -261,101 +284,3 @@ pub enum HumanoidAi {
 }
 
 pub struct HumanoidAnimation {}
-
-pub fn update_humanoid_physics_x(base: &mut HumanoidBase, physics: &mut HumanoidPhysics, ft: f32) {
-    physics.last_x = base.x;
-    base.x += 0.5 * physics.ddx * ft * ft + physics.dx * ft;
-    physics.dx += physics.ddx * ft;
-}
-
-pub fn resolve_humanoid_tile_collision_x(
-    base: &mut HumanoidBase,
-    physics: &mut HumanoidPhysics,
-    stride: usize,
-    tiles: &Box<[Tile]>,
-) {
-    // Calculate (x1..x2) based on distance moved.
-    let (x1, x2) = if base.x > physics.last_x {
-        let x1 = ((physics.last_x + base.w) / TILE_SIZE as f32).ceil() as usize;
-        let x2 = ((base.x + base.w) / TILE_SIZE as f32).ceil() as usize;
-        (x1, x2)
-    } else {
-        let x1 = base.x as usize / TILE_SIZE;
-        let x2 = physics.last_x as usize / TILE_SIZE;
-        (x1, x2)
-    };
-
-    // Calculate (y1..y2).
-    let y1 = physics.last_y as usize / TILE_SIZE;
-    let y2 = ((physics.last_y + base.h) / TILE_SIZE as f32).ceil() as usize;
-
-    // Iterate all newly touched tiles.
-    for y in y1..y2 {
-        for x in x1..x2 {
-            let src_index = x + y * stride;
-            let tile = tiles[src_index];
-            let property = TILE_PHYSICS_PROPERTIES[tile as usize]; // TODO pass this in?
-
-            // Solid.
-            if property.solid {
-                if base.x > physics.last_x {
-                    base.x = (x * TILE_SIZE) as f32 - base.w;
-                }
-                if base.x < physics.last_x {
-                    base.x = ((x + 1) * TILE_SIZE) as f32;
-                }
-                physics.dx = 0.;
-            }
-        }
-    }
-}
-
-pub fn update_humanoid_physics_y(base: &mut HumanoidBase, physics: &mut HumanoidPhysics, ft: f32) {
-    physics.last_y = base.y;
-    base.y += 0.5 * physics.ddy * ft * ft + physics.dy * ft;
-    physics.dy += physics.ddy * ft;
-}
-
-pub fn resolve_humanoid_tile_collision_y(
-    base: &mut HumanoidBase,
-    physics: &mut HumanoidPhysics,
-    stride: usize,
-    tiles: &Box<[Tile]>,
-) {
-    // Calculate (x1..x2).
-    let x1 = physics.last_x as usize / TILE_SIZE;
-    let x2 = ((physics.last_x + base.w) / TILE_SIZE as f32).ceil() as usize;
-
-    // Calculate (y1..y2) based on distance moved.
-    let (y1, y2) = if base.y > physics.last_y {
-        let y1 = ((physics.last_y + base.h) / TILE_SIZE as f32).ceil() as usize;
-        let y2 = ((base.y + base.h) / TILE_SIZE as f32).ceil() as usize;
-        (y1, y2)
-    } else {
-        let y1 = base.y as usize / TILE_SIZE;
-        let y2 = physics.last_y as usize / TILE_SIZE;
-        (y1, y2)
-    };
-
-    // Iterate all newly touched tiles.
-    for y in y1..y2 {
-        for x in x1..x2 {
-            let src_index = x + y * stride;
-            let tile = tiles[src_index];
-            let property = TILE_PHYSICS_PROPERTIES[tile as usize]; // TODO pass this in?
-
-            // Solid.
-            if property.solid {
-                if base.y > physics.last_y {
-                    base.flags |= HUMANOID_ON_GROUND_BIT;
-                    base.y = (y * TILE_SIZE) as f32 - base.h;
-                    physics.dy = 0.;
-                }
-                if base.y < physics.last_y {
-                    base.y = ((y + 1) * TILE_SIZE) as f32;
-                    physics.dy *= 0.50;
-                }
-            }
-        }
-    }
-}

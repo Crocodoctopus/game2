@@ -1,6 +1,6 @@
 use crate::client::{log, GameRenderDesc, GameRenderState, GameUpdateState};
 use crate::net::{ClientNetManager, NetEventKind};
-use crate::shared::*;
+use crate::shared::net::*;
 use crate::time::*;
 use crate::{InputEvent, Window};
 use crossbeam_channel::Receiver;

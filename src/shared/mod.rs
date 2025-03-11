@@ -1,22 +1,11 @@
-mod collision;
-mod humanoid;
-mod input;
-mod light;
-mod net;
-mod tile;
+pub mod entity_collision;
+pub mod humanoid;
+pub mod input;
+pub mod item;
+pub mod light;
+pub mod misc;
+pub mod net;
+pub mod physics;
+pub mod tile;
+pub mod tile_collision;
 pub mod tile_damage;
-
-pub use collision::*;
-pub use humanoid::*;
-
-pub use light::*;
-pub use net::*;
-pub use tile::*;
-
-// Chunk.
-pub const CHUNK_SIZE: usize = 8;
-pub const CHUNK_AREA: usize = CHUNK_SIZE * CHUNK_SIZE;
-
-// View.
-pub const CHUNK_LOAD_WIDTH: usize = 10;
-pub const CHUNK_LOAD_HEIGHT: usize = 6;
