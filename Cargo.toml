@@ -13,11 +13,12 @@ panic = "abort"
 [dependencies]
 lazy_static = "1.4.0"
 once_cell = "1.19.0"
-futures = "0.3.30"
 nalgebra-glm = { version = "0.18.0", default-features = false }
 image = { version = "0.25.1", default-features = false, features = ["png"] }
-winit = { version = "0.29.15", default-features = false, features = ["x11", "rwh_06"]  }
-wgpu = { version = "0.19.3", default-features = false, features = ["wgsl", "metal"] }
+winit = { version = "0.30.9", default-features = false, features = ["x11", "rwh_06"]  }
+gl = "0.14.0"
+glutin = { version = "0.32.2", default-features = false }
+glutin-winit = { version = "0.5.0", default-features = false, features = ["egl"] }
 bytemuck = { version = "1.15.0", default-features = false, features = ["derive"] }
 laminar = "0.5.0"
 bitcode = "0.6.0"

@@ -1,632 +1,310 @@
-use crate::client::{GameRenderDesc, SpriteRenderDesc};
-use crate::shared::tile::*;
-use crate::{InputEvent, Window};
-use futures::executor::block_on;
+use crate::client::game_render_desc::{self, *};
+use crate::shared::tile::{TileKind, TILE_SIZE};
+use crate::window::*;
+use glutin::context::{
+    ContextApi, ContextAttributesBuilder, NotCurrentContext, PossiblyCurrentContext, Version,
+};
+use glutin::display::GetGlDisplay;
+use glutin::prelude::{GlDisplay, NotCurrentGlContext};
+use glutin::surface::{GlSurface, Surface, WindowSurface};
+use glutin_winit::GlWindow;
 use nalgebra_glm::*;
+use std::ffi::c_void;
 use std::path::Path;
-use wgpu::util::DeviceExt;
-use wgpu::*;
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Mat4([[f32; 4]; 4]);
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vec4([f32; 4]);
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct TileVertexInput {
-    tile_xyz: [f32; 3],
-    tile_uv: [f32; 2],
-    mask_uv: [f32; 2],
-}
-
-impl TileVertexInput {
-    const ATTRIB: [VertexAttribute; 3] = vertex_attr_array![
-        0 => Float32x3,
-        1 => Float32x2,
-        2 => Float32x2
-    ];
-
-    fn buffer_layout<'a>() -> VertexBufferLayout<'a> {
-        VertexBufferLayout {
-            array_stride: std::mem::size_of::<Self>() as _,
-            step_mode: VertexStepMode::Vertex,
-            attributes: &Self::ATTRIB,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct LightVertexInput {
-    light_xy: [f32; 2],
-    light_uv: [f32; 2],
-}
-
-impl LightVertexInput {
-    const ATTRIB: [VertexAttribute; 2] = vertex_attr_array![
-        0 => Float32x2,
-        1 => Float32x2,
-    ];
-
-    fn buffer_layout<'a>() -> VertexBufferLayout<'a> {
-        VertexBufferLayout {
-            array_stride: std::mem::size_of::<Self>() as _,
-            step_mode: VertexStepMode::Vertex,
-            attributes: &Self::ATTRIB,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct SpriteVertexInput {
-    sprite_xy: [f32; 2],
-    sprite_uv: [f32; 2],
-}
+use winit::raw_window_handle::HasWindowHandle;
 
 #[allow(dead_code)]
-pub struct GameRenderState<'a> {
-    // State.
-    surface_config: SurfaceConfiguration,
-    pub surface: Surface<'a>,
-    device: Device,
-    queue: Queue,
+pub struct GameRenderState {
+    context: PossiblyCurrentContext,
+    surface: Surface<WindowSurface>,
 
-    // Textures.
-    sprite_tex: (Texture, TextureView),
-    tile_sprite_tex: (Texture, TextureView),
-    tile_mask_tex: (Texture, TextureView),
-    light_tex: (Texture, TextureView),
+    // General purpose
+    global_vao: GlHandle,
+    quad_ibo: GlHandle, // u16
 
-    // General purpose IBO.
-    quad_ibo: Buffer,
-
-    // Misc bind group.
-    misc_bind_group: BindGroup,
-    view_uniform: Buffer,
-
-    // Tile rendering.
-    tile_pipeline: RenderPipeline,
-    fg_const_uniform: Buffer,
-    bg_const_uniform: Buffer,
-    fg_bind_group: BindGroup,
-    bg_bind_group: BindGroup,
+    //
+    //sprite_texture: GlHandle,
+    sprite_program: GlHandle,
+    sprite_xyz: GlHandle,
+    sprite_uv: GlHandle,
+    sprite_rgb: GlHandle,
 
     // Light rendering.
-    light_pipeline: RenderPipeline,
-    light_bind_group: BindGroup,
+    light_texture: GlHandle,
+    light_program: GlHandle,
 
-    // Sprite rendering.
-    sprite_pipeline: RenderPipeline,
-    sprite_bind_group: BindGroup,
+    // Tile rendering.
+    tile_texture: GlHandle, // RGBA
+    mask_texture: GlHandle, // R
+    tile_program: GlHandle,
+    tile_xyz: GlHandle,     // xyz f32
+    tile_uv: GlHandle,      // uv f32
+    tile_mask_uv: GlHandle, // uv f32
 }
 
-impl<'a> GameRenderState<'a> {
-    pub fn new(_root: &'static Path, window: &'a Window) -> Self {
-        // General initialization of render state.
-        let (surface, device, queue, surface_config) = {
-            // Instance.
-            let instance = Instance::new(InstanceDescriptor {
-                backends: Backends::all(),
-                ..Default::default()
-            });
+struct GlHandle(pub gl::types::GLuint);
 
-            // Surface.
-            let surface = instance.create_surface(&window.window).unwrap();
+impl GlHandle {
+    fn null() -> Self {
+        Self(0)
+    }
 
-            // Physical device.
-            let physical_device = block_on(instance.request_adapter(&RequestAdapterOptions {
-                power_preference: PowerPreference::LowPower,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            }))
-            .expect("Could not find a suitable GPU.");
+    fn is_null(&self) -> bool {
+        self.0 == 0
+    }
+}
 
-            // Logical device and command queue.
-            let (device, queue) = block_on(physical_device.request_device(
-                &DeviceDescriptor {
-                    required_features: Features::empty(),
-                    ..Default::default()
-                },
-                None,
-            ))
+#[allow(unused)]
+#[derive(Copy, Clone, Debug)]
+#[repr(C)]
+struct GlVec2(f32, f32);
+
+#[allow(unused)]
+#[derive(Copy, Clone, Debug)]
+#[repr(C)]
+struct GlVec3(f32, f32, f32);
+
+impl GameRenderState {
+    pub fn new(
+        _root: &'static Path,
+        context: NotCurrentContext,
+        surface: Surface<WindowSurface>,
+    ) -> Self {
+        let context = context.make_current(&surface).unwrap();
+
+        let check_shader_error = |shader: u32| unsafe {
+            let mut success: i32 = 2;
+            gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut success);
+            assert_ne!(success, 2);
+            if success == gl::FALSE as i32 {
+                let mut size: i32 = 0;
+                gl::GetShaderiv(shader, gl::INFO_LOG_LENGTH, &mut size);
+                let mut bytes = vec![0u8; size as usize];
+                gl::GetShaderInfoLog(shader, size, &mut size, bytes.as_mut_ptr() as *mut i8);
+                return Err(String::from_utf8_lossy(&bytes[0..size as usize]).into_owned());
+            }
+            Ok(())
+        };
+
+        let check_program_error = |program: u32| unsafe {
+            let mut success: i32 = 2;
+            gl::GetProgramiv(program, gl::LINK_STATUS, &mut success);
+            assert_ne!(success, 2);
+            if success == gl::FALSE as i32 {
+                let mut size: i32 = 0;
+                gl::GetProgramiv(program, gl::INFO_LOG_LENGTH, &mut size);
+                let mut bytes = vec![0u8; size as usize];
+                gl::GetProgramInfoLog(program, size, &mut size, bytes.as_mut_ptr() as *mut i8);
+                return Err(String::from_utf8_lossy(&bytes[0..size as usize]).into_owned());
+            }
+            Ok(())
+        };
+
+        let gen_buffer = || unsafe {
+            let mut handle = GlHandle::null();
+            gl::GenBuffers(1, &mut handle.0);
+            (handle.0 > 0).then_some(handle)
+        };
+
+        let create_shader = |src: &[u8], kind: gl::types::GLenum| unsafe {
+            let src_ptr = src.as_ptr() as *const i8;
+            let src_len = src.len() as i32;
+            let shader = gl::CreateShader(kind);
+            assert_ne!(shader, 0);
+            gl::ShaderSource(shader, 1, &src_ptr, &src_len);
+            gl::CompileShader(shader);
+            check_shader_error(shader).map(|_| GlHandle(shader))
+        };
+
+        let create_program = |vert_shader: GlHandle, frag_shader: GlHandle| unsafe {
+            let program = gl::CreateProgram();
+            gl::AttachShader(program, vert_shader.0);
+            gl::AttachShader(program, frag_shader.0);
+            gl::LinkProgram(program);
+            gl::DeleteShader(vert_shader.0);
+            gl::DeleteShader(frag_shader.0);
+            check_program_error(program).map(|_| GlHandle(program))
+        };
+
+        unsafe {
+            use gl::types::*;
+            extern "system" fn gl_debug_callback(
+                _source: GLenum,
+                _ptype: GLenum,
+                _id: GLuint,
+                _severity: GLenum,
+                _length: GLsizei,
+                message: *const GLchar,
+                _user_param: *mut c_void,
+            ) {
+                let msg = unsafe { std::ffi::CStr::from_ptr(message) };
+                println!("GL CALLBACK: {msg:?}");
+            }
+
+            gl::Enable(gl::DEBUG_OUTPUT);
+            gl::Enable(gl::BLEND);
+            gl::Enable(gl::PRIMITIVE_RESTART);
+            gl::Enable(gl::TEXTURE_2D);
+            gl::DebugMessageCallback(Some(gl_debug_callback), std::ptr::null());
+
+            // Load tile texture into gpu.
+            let temp_texture =
+                image::load_from_memory(include_bytes!("../../resources/tile_sheet.png")).unwrap();
+            let mut tile_texture = GlHandle::null();
+            gl::GenTextures(1, &mut tile_texture.0);
+            assert!(!tile_texture.is_null());
+            gl::BindTexture(gl::TEXTURE_2D, tile_texture.0);
+            gl::TexImage2D(
+                gl::TEXTURE_2D,
+                0,
+                gl::RGB as i32,
+                temp_texture.width() as i32,
+                temp_texture.height() as i32,
+                0,
+                gl::RGB,
+                gl::UNSIGNED_BYTE,
+                temp_texture.into_rgb8().as_ptr() as *const c_void,
+            );
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+
+            // Load mask texture into gpu.
+            let temp_texture =
+                image::load_from_memory(include_bytes!("../../resources/mask_sheet.png")).unwrap();
+            let mut mask_texture = GlHandle::null();
+            gl::GenTextures(1, &mut mask_texture.0);
+            gl::BindTexture(gl::TEXTURE_2D, mask_texture.0);
+            gl::TexImage2D(
+                gl::TEXTURE_2D,
+                0,
+                gl::R8I as i32,
+                temp_texture.width() as i32,
+                temp_texture.height() as i32,
+                0,
+                gl::RED_INTEGER,
+                gl::UNSIGNED_BYTE,
+                temp_texture.into_luma8().as_ptr() as *const c_void,
+            );
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+
+            // Create light texture.
+            let mut light_texture = GlHandle::null();
+            gl::GenTextures(1, &mut light_texture.0);
+            gl::BindTexture(gl::TEXTURE_2D, light_texture.0);
+            gl::TexImage2D(
+                gl::TEXTURE_2D,
+                0,
+                gl::RGBA8UI as i32,
+                512,
+                512,
+                0,
+                gl::RGBA_INTEGER,
+                gl::UNSIGNED_BYTE,
+                std::ptr::null(),
+            );
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+
+            // Bind the VAO and never touch it again.
+            let mut global_vao = GlHandle::null();
+            gl::GenVertexArrays(1, &mut global_vao.0);
+            assert!(!global_vao.is_null());
+            gl::BindVertexArray(global_vao.0);
+
+            let quad_ibo = gen_buffer().unwrap();
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, quad_ibo.0);
+            let ibo_data: Box<[u16]> = (0..u16::MAX / 5)
+                .flat_map(|i| [4 * i, 4 * i + 3, 4 * i + 1, 4 * i + 2, u16::MAX])
+                .collect();
+            gl::BufferData(
+                gl::ELEMENT_ARRAY_BUFFER,
+                ibo_data.len() as isize,
+                ibo_data.as_ptr() as *const c_void,
+                gl::STATIC_DRAW,
+            );
+
+            let tile_xyz = gen_buffer().unwrap();
+            let tile_uv = gen_buffer().unwrap();
+            let tile_mask_uv = gen_buffer().unwrap();
+
+            let sprite_xyz = gen_buffer().unwrap();
+            let sprite_uv = gen_buffer().unwrap();
+            let sprite_rgb = gen_buffer().unwrap();
+
+            let tile_program = create_program(
+                create_shader(
+                    include_bytes!("./shaders/tile.glsl.vert"),
+                    gl::VERTEX_SHADER,
+                )
+                .unwrap(),
+                create_shader(
+                    include_bytes!("./shaders/tile.glsl.frag"),
+                    gl::FRAGMENT_SHADER,
+                )
+                .unwrap(),
+            )
             .unwrap();
 
-            //
-            let surface_config = SurfaceConfiguration {
-                usage: TextureUsages::RENDER_ATTACHMENT,
-                format: TextureFormat::Bgra8Unorm,
-                width: 1280,
-                height: 720,
-                present_mode: PresentMode::Fifo,
-                desired_maximum_frame_latency: 1,
-                alpha_mode: CompositeAlphaMode::Auto,
-                view_formats: vec![],
-            };
-            surface.configure(&device, &surface_config);
-
-            (surface, device, queue, surface_config)
-        };
-
-        #[rustfmt::skip]
-        use image::GenericImageView;
-        let create_wgpu_texture = |(width, height), format, data: &[u8]| {
-            device.create_texture_with_data(
-                &queue,
-                &TextureDescriptor {
-                    label: None,
-                    size: Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: TextureDimension::D2,
-                    format,
-                    usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-                    view_formats: &[],
-                },
-                util::TextureDataOrder::LayerMajor,
-                data,
+            let light_program = create_program(
+                create_shader(
+                    include_bytes!("./shaders/light.glsl.vert"),
+                    gl::VERTEX_SHADER,
+                )
+                .unwrap(),
+                create_shader(
+                    include_bytes!("./shaders/light.glsl.frag"),
+                    gl::FRAGMENT_SHADER,
+                )
+                .unwrap(),
             )
-        };
+            .unwrap();
 
-        let sprite_tex = {
-            let texture =
-                image::load_from_memory(include_bytes!("../../resources/tile_sheet.png")).unwrap();
-            let size = texture.dimensions();
-            let pixels = texture.into_rgba8();
-            let texture = create_wgpu_texture(size, TextureFormat::Rgba8Unorm, &pixels);
-            let view = texture.create_view(&<_>::default());
-            (texture, view)
-        };
+            let sprite_program = create_program(
+                create_shader(
+                    include_bytes!("./shaders/sprite.glsl.vert"),
+                    gl::VERTEX_SHADER,
+                )
+                .unwrap(),
+                create_shader(
+                    include_bytes!("./shaders/sprite.glsl.frag"),
+                    gl::FRAGMENT_SHADER,
+                )
+                .unwrap(),
+            )
+            .unwrap();
 
-        let tile_sprite_tex = {
-            let texture =
-                image::load_from_memory(include_bytes!("../../resources/tile_sheet.png")).unwrap();
-            let size = texture.dimensions();
-            let pixels = texture.into_rgba8();
-            let texture = create_wgpu_texture(size, TextureFormat::Rgba8Unorm, &pixels);
-            let view = texture.create_view(&<_>::default());
-            (texture, view)
-        };
+            Self {
+                context,
+                surface,
 
-        let tile_mask_tex = {
-            let texture =
-                image::load_from_memory(include_bytes!("../../resources/mask_sheet.png")).unwrap();
-            let size = texture.dimensions();
-            let pixels = texture.into_luma8();
-            let texture = create_wgpu_texture(size, TextureFormat::R8Uint, &pixels);
-            let view = texture.create_view(&<_>::default());
-            (texture, view)
-        };
+                global_vao,
+                quad_ibo,
 
-        let light_tex = {
-            let texture = device.create_texture(&TextureDescriptor {
-                label: Some("Light Texture"),
-                size: Extent3d {
-                    width: 512,
-                    height: 512,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: TextureFormat::Rgba8Uint,
-                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&<_>::default());
-            (texture, view)
-        };
+                //sprite_texture,
+                sprite_program,
+                sprite_xyz,
+                sprite_uv,
+                sprite_rgb,
+                light_texture,
+                light_program,
 
-        // Generic index buffer.
-        let quad_ibo = {
-            #[rustfmt::skip]
-            let ibo_data: Vec<u16> = (0..13107)
-                .into_iter()
-                .flat_map(|i| [i * 4 + 0, i * 4 + 3, i * 4 + 1, i * 4 + 2, u16::MAX])
-                .collect();
-            assert_eq!(ibo_data.len(), 65535);
-
-            let buffer = device.create_buffer_init(&util::BufferInitDescriptor {
-                label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(&ibo_data),
-                usage: BufferUsages::INDEX,
-            });
-
-            buffer
-        };
-
-        // Create camera buffer.
-        let view_uniform = device.create_buffer(&BufferDescriptor {
-            label: Some("View Uniform"),
-            size: std::mem::size_of::<Mat4>() as u64,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Misc bind group.
-        let misc_bind_group = {
-            let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: Some("Misc Bind Group Layout"),
-                entries: &[BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::VERTEX,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-
-            let group = device.create_bind_group(&BindGroupDescriptor {
-                label: Some("Misc Bind Group"),
-                layout: &layout,
-                entries: &[BindGroupEntry {
-                    binding: 0,
-                    resource: view_uniform.as_entire_binding(),
-                }],
-            });
-
-            (group, layout)
-        };
-
-        // Const uniforms.
-        let fg_const_uniform = device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("FG Const Uniform"),
-            usage: BufferUsages::UNIFORM,
-            contents: bytemuck::cast_slice(&[Vec4([1.0, 1.0, 1.0, 1.0])]),
-        });
-        let bg_const_uniform = device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("FG Const Uniform"),
-            usage: BufferUsages::UNIFORM,
-            contents: bytemuck::cast_slice(&[Vec4([0.6, 0.6, 0.7, 1.0])]),
-        });
-
-        // Create tile rendering pipeline.
-        let (tile_pipeline, fg_bind_group, bg_bind_group) = {
-            // Shader.
-            let shader = device.create_shader_module(include_wgsl!("shaders/tile.wgsl"));
-
-            // Bind group.
-            let (fg_bind_group, bg_bind_group, bind_group_layout) = {
-                let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                    entries: &[
-                        BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: ShaderStages::FRAGMENT,
-                            ty: BindingType::Texture {
-                                multisampled: false,
-                                view_dimension: TextureViewDimension::D2,
-                                sample_type: TextureSampleType::Float { filterable: false },
-                            },
-                            count: None,
-                        },
-                        BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: ShaderStages::FRAGMENT,
-                            ty: BindingType::Texture {
-                                multisampled: false,
-                                view_dimension: TextureViewDimension::D2,
-                                sample_type: TextureSampleType::Uint,
-                            },
-                            count: None,
-                        },
-                        BindGroupLayoutEntry {
-                            binding: 2,
-                            visibility: ShaderStages::FRAGMENT,
-                            ty: BindingType::Buffer {
-                                ty: BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                    ],
-                    label: Some("Tile Bind Group Layout"),
-                });
-
-                let fg_group = device.create_bind_group(&BindGroupDescriptor {
-                    layout: &layout,
-                    entries: &[
-                        BindGroupEntry {
-                            binding: 0,
-                            resource: BindingResource::TextureView(&tile_sprite_tex.1),
-                        },
-                        BindGroupEntry {
-                            binding: 1,
-                            resource: BindingResource::TextureView(&tile_mask_tex.1),
-                        },
-                        BindGroupEntry {
-                            binding: 2,
-                            resource: fg_const_uniform.as_entire_binding(),
-                        },
-                    ],
-                    label: Some("Tile FG Bind Group"),
-                });
-
-                let bg_group = device.create_bind_group(&BindGroupDescriptor {
-                    layout: &layout,
-                    entries: &[
-                        BindGroupEntry {
-                            binding: 0,
-                            resource: BindingResource::TextureView(&tile_sprite_tex.1),
-                        },
-                        BindGroupEntry {
-                            binding: 1,
-                            resource: BindingResource::TextureView(&tile_mask_tex.1),
-                        },
-                        BindGroupEntry {
-                            binding: 2,
-                            resource: bg_const_uniform.as_entire_binding(),
-                        },
-                    ],
-                    label: Some("Tile BG Bind Group"),
-                });
-
-                (fg_group, bg_group, layout)
-            };
-
-            // Pipeline layout.
-            let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&misc_bind_group.1, &bind_group_layout],
-                push_constant_ranges: &[],
-            });
-
-            // Render pipeline.
-            let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-                label: Some("Tile Render Pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: VertexState {
-                    module: &shader,
-                    entry_point: "vs_main",
-                    buffers: &[TileVertexInput::buffer_layout()],
-                },
-                fragment: Some(FragmentState {
-                    module: &shader,
-                    entry_point: "fs_main",
-                    targets: &[Some(ColorTargetState {
-                        format: surface_config.format,
-                        blend: Some(BlendState::REPLACE),
-                        write_mask: ColorWrites::ALL,
-                    })],
-                }),
-                primitive: PrimitiveState {
-                    topology: PrimitiveTopology::TriangleStrip,
-                    strip_index_format: Some(IndexFormat::Uint16),
-                    front_face: FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview: None,
-            });
-
-            (pipeline, fg_bind_group, bg_bind_group)
-        };
-
-        let (light_pipeline, light_bind_group) = {
-            // Shader.
-            let shader = device.create_shader_module(include_wgsl!("shaders/light.wgsl"));
-
-            // Bind group.
-            let bind_group = {
-                let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                    label: Some("Light Bind Group Layout"),
-                    entries: &[BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: TextureViewDimension::D2,
-                            sample_type: TextureSampleType::Uint,
-                        },
-                        count: None,
-                    }],
-                });
-
-                let group = device.create_bind_group(&BindGroupDescriptor {
-                    label: Some("Light Bind Group"),
-                    layout: &layout,
-                    entries: &[BindGroupEntry {
-                        binding: 0,
-                        resource: BindingResource::TextureView(&light_tex.1),
-                    }],
-                });
-
-                (group, layout)
-            };
-
-            // Pipeline layout.
-            let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("Light Pipeline Layout"),
-                bind_group_layouts: &[&misc_bind_group.1, &bind_group.1],
-                push_constant_ranges: &[],
-            });
-
-            // Render pipeline.
-            let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-                label: Some("Light Pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: VertexState {
-                    module: &shader,
-                    entry_point: "vs_main",
-                    buffers: &[LightVertexInput::buffer_layout()],
-                },
-                fragment: Some(FragmentState {
-                    module: &shader,
-                    entry_point: "fs_main",
-                    targets: &[Some(ColorTargetState {
-                        format: surface_config.format,
-                        blend: Some(BlendState {
-                            color: BlendComponent {
-                                src_factor: BlendFactor::Dst,
-                                dst_factor: BlendFactor::Zero,
-                                operation: BlendOperation::Add,
-                            },
-                            alpha: BlendComponent::default(),
-                        }),
-                        write_mask: ColorWrites::ALL,
-                    })],
-                }),
-                primitive: PrimitiveState {
-                    topology: PrimitiveTopology::TriangleStrip,
-                    strip_index_format: Some(IndexFormat::Uint16),
-                    front_face: FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview: None,
-            });
-
-            (pipeline, bind_group)
-        };
-
-        let (sprite_pipeline, sprite_bind_group) = {
-            // Shader.
-            let shader = device.create_shader_module(include_wgsl!("shaders/sprite.wgsl"));
-
-            // Bind group.
-            let bind_group = {
-                let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                    label: Some("Sprite Bind Group Layout"),
-                    entries: &[BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: TextureViewDimension::D2,
-                            sample_type: TextureSampleType::Float { filterable: false },
-                        },
-                        count: None,
-                    }],
-                });
-
-                let group = device.create_bind_group(&BindGroupDescriptor {
-                    label: Some("Sprite Bind Group"),
-                    layout: &layout,
-                    entries: &[BindGroupEntry {
-                        binding: 0,
-                        resource: BindingResource::TextureView(&sprite_tex.1),
-                    }],
-                });
-
-                (group, layout)
-            };
-
-            // Pipeline layout.
-            let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("Sprite Pipeline Layout"),
-                bind_group_layouts: &[&misc_bind_group.1, &bind_group.1],
-                push_constant_ranges: &[],
-            });
-
-            // Render pipeline.
-            let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-                label: Some("Sprite Pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: VertexState {
-                    module: &shader,
-                    entry_point: "vs_main",
-                    buffers: &[LightVertexInput::buffer_layout()],
-                },
-                fragment: Some(FragmentState {
-                    module: &shader,
-                    entry_point: "fs_main",
-                    targets: &[Some(ColorTargetState {
-                        format: surface_config.format,
-                        blend: None,
-                        write_mask: ColorWrites::ALL,
-                    })],
-                }),
-                primitive: PrimitiveState {
-                    topology: PrimitiveTopology::TriangleStrip,
-                    strip_index_format: Some(IndexFormat::Uint16),
-                    front_face: FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview: None,
-            });
-
-            (pipeline, bind_group)
-        };
-
-        Self {
-            surface,
-            device,
-            queue,
-            surface_config,
-
-            quad_ibo,
-
-            misc_bind_group: misc_bind_group.0,
-            view_uniform,
-
-            sprite_tex,
-            tile_sprite_tex,
-            tile_mask_tex,
-            light_tex,
-
-            tile_pipeline,
-            fg_const_uniform,
-            bg_const_uniform,
-            fg_bind_group,
-            bg_bind_group,
-
-            light_pipeline,
-            light_bind_group: light_bind_group.0,
-
-            sprite_pipeline,
-            sprite_bind_group: sprite_bind_group.0,
+                tile_texture,
+                mask_texture,
+                tile_program,
+                tile_xyz,
+                tile_uv,
+                tile_mask_uv,
+            }
         }
     }
 
-    pub fn handle_events<'e>(
-        &mut self,
-        input_events: impl Iterator<Item = &'e InputEvent>,
-    ) -> bool {
-        for &event in input_events {
+    pub fn handle_events(&mut self, input_events: impl Iterator<Item = InputEvent>) -> bool {
+        for event in input_events {
             match event {
                 InputEvent::WindowClose => return true,
 
-                InputEvent::WindowResize { width, height } => {
-                    self.surface_config.width = width as u32;
-                    self.surface_config.height = height as u32;
-                    self.surface.configure(&self.device, &self.surface_config);
-                }
+                InputEvent::WindowResize { width, height } => {}
 
                 // Most events are ignored.
                 _ => {}
@@ -636,388 +314,486 @@ impl<'a> GameRenderState<'a> {
         false
     }
 
-    pub fn render(&mut self, output: SurfaceTexture, _ts: u64, game_render_desc: &GameRenderDesc) {
-        // Whisked away to a far off place.
-        self.process_view_matrix(&game_render_desc);
-        let light_vertex_input = self.process_light_state(&game_render_desc);
-        let (fg_vertex_input, fg_count, bg_vertex_input, bg_count) =
-            self.process_tile_state(&game_render_desc);
-        let (sprite_vertex_input, sprite_count) = self.process_sprite_state(&game_render_desc);
-
-        // Begin rendering.
-        let view = output.texture.create_view(&<_>::default());
-        let mut encoder = self.device.create_command_encoder(&<_>::default());
-        let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Render Pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Clear(Color {
-                        r: 0x15 as f64 / 255.,
-                        g: 0x9F as f64 / 255.,
-                        b: 0xEA as f64 / 255.,
-                        a: 1.0,
-                    }),
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            occlusion_query_set: None,
-            timestamp_writes: None,
-        });
-
-        // Generic IBO and misc group.
-        render_pass.set_index_buffer(self.quad_ibo.slice(..), IndexFormat::Uint16);
-        render_pass.set_bind_group(0, &self.misc_bind_group, &[]);
-
-        // Tile rendering.
-        {
-            // Pipeline and tile bind group are shared.
-            render_pass.set_pipeline(&self.tile_pipeline);
-
-            // BG Tile Rendering.
-            render_pass.set_bind_group(1, &self.bg_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, bg_vertex_input.slice(..));
-            render_pass.draw_indexed(0..bg_count * 5, 0, 0..1);
-
-            // FG Tile Rendering.
-            render_pass.set_bind_group(1, &self.fg_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, fg_vertex_input.slice(..));
-            render_pass.draw_indexed(0..fg_count * 5, 0, 0..1);
-        }
-
-        // Light rendering.
-        {
-            render_pass.set_pipeline(&self.light_pipeline);
-            render_pass.set_bind_group(1, &self.light_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, light_vertex_input.slice(..));
-            render_pass.draw_indexed(0..4, 0, 0..1);
-        }
-
-        // Sprite rendering.
-        {
-            render_pass.set_pipeline(&self.sprite_pipeline);
-            render_pass.set_bind_group(1, &self.sprite_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, sprite_vertex_input.slice(..));
-            render_pass.draw_indexed(0..sprite_count * 5, 0, 0..1);
-        }
-
-        // End rendering.
-        drop(render_pass);
-        self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-    }
-
-    fn process_view_matrix(&mut self, game_render_desc: &GameRenderDesc) {
-        // Calculate view matrix.
-        let view = {
+    pub fn render(&mut self, _ts: u64, game_render_desc: &GameRenderDesc) {
+        // Compute view matrix.
+        let view_matrix = {
             let view = Mat3::identity();
             let view = view
                 * scaling2d(&Vec2::new(
                     2. / game_render_desc.viewport_w,
                     -2. / game_render_desc.viewport_h,
                 ));
-            let view = view
-                * translation2d(&Vec2::new(
-                    -game_render_desc.viewport_x - game_render_desc.viewport_w / 2.,
-                    -game_render_desc.viewport_y - game_render_desc.viewport_h / 2.,
-                ));
-            view
+            view * translation2d(&Vec2::new(
+                -game_render_desc.viewport_x - game_render_desc.viewport_w / 2.,
+                -game_render_desc.viewport_y - game_render_desc.viewport_h / 2.,
+            ))
         };
 
-        self.queue.write_buffer(
-            &self.view_uniform,
-            0,
-            bytemuck::cast_slice(&[Mat4(nalgebra_glm::mat3_to_mat4(&view).into())]),
-        );
-    }
-
-    fn process_light_state(&mut self, game_render_desc: &GameRenderDesc) -> Buffer {
-        // Calculate light data.
-        let rgba: Vec<u8> = (0..game_render_desc.light_w * game_render_desc.light_h)
-            .into_iter()
-            .flat_map(|i| {
-                [
-                    game_render_desc.r_channel[i].raw(),
-                    game_render_desc.g_channel[i].raw(),
-                    game_render_desc.b_channel[i].raw(),
-                    255,
-                ]
-            })
-            .collect();
-        let light_x = game_render_desc.light_x as f32;
-        let light_y = game_render_desc.light_y as f32;
-        let light_w = game_render_desc.light_w as f32;
-        let light_h = game_render_desc.light_h as f32;
-        let light_vertices = [
-            LightVertexInput {
-                light_xy: [light_x * 16., light_y * 16.],
-                light_uv: [0., 0.],
-            },
-            LightVertexInput {
-                light_xy: [(light_x + light_w) * 16., light_y * 16.],
-                light_uv: [light_w, 0.],
-            },
-            LightVertexInput {
-                light_xy: [(light_x + light_w) * 16., (light_y + light_h) * 16.],
-                light_uv: [light_w, light_h],
-            },
-            LightVertexInput {
-                light_xy: [light_x * 16., (light_y + light_h) * 16.],
-                light_uv: [0., light_h],
-            },
-        ];
-
-        // Upload light texture.
-        self.queue.write_texture(
-            ImageCopyTextureBase {
-                texture: &self.light_tex.0,
-                mip_level: 0,
-                origin: Origin3d::ZERO,
-                aspect: TextureAspect::All,
-            },
-            &rgba,
-            ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * game_render_desc.light_w as u32),
-                rows_per_image: Some(game_render_desc.light_h as u32),
-            },
-            Extent3d {
-                width: game_render_desc.light_w as u32,
-                height: game_render_desc.light_h as u32,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        // Upload light vbo data.
-        let light_vertex_input = self.device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("Light Vertex Input Buffer"),
-            contents: bytemuck::cast_slice(&light_vertices),
-            usage: BufferUsages::VERTEX,
-        });
-
-        light_vertex_input
-    }
-
-    fn process_sprite_state(&mut self, game_render_desc: &GameRenderDesc) -> (Buffer, u32) {
-        let mut sprites = Vec::with_capacity(4 * game_render_desc.sprites.len());
-
-        for &SpriteRenderDesc { x, y, u, v, w, h } in game_render_desc.sprites.iter() {
-            sprites.extend_from_slice(&[
-                SpriteVertexInput {
-                    sprite_xy: [x, y],
-                    sprite_uv: [u, v],
-                },
-                SpriteVertexInput {
-                    sprite_xy: [x + w, y],
-                    sprite_uv: [u + w, v],
-                },
-                SpriteVertexInput {
-                    sprite_xy: [x + w, y + h],
-                    sprite_uv: [u + w, v + h],
-                },
-                SpriteVertexInput {
-                    sprite_xy: [x, y + h],
-                    sprite_uv: [u, v + h],
-                },
-            ]);
+        // Upload light data to texture.
+        {
+            let w = game_render_desc.light_w;
+            let h = game_render_desc.light_h;
+            let mut data = vec![0u8; 4 * w * h];
+            for i in 0..w * h {
+                data[4 * i] = game_render_desc.r_channel[i].raw();
+                data[4 * i + 1] = game_render_desc.g_channel[i].raw();
+                data[4 * i + 2] = game_render_desc.b_channel[i].raw();
+            }
+            assert!(w < 512);
+            assert!(h < 512);
+            unsafe {
+                gl::BindTexture(gl::TEXTURE_2D, self.light_texture.0);
+                gl::TexSubImage2D(
+                    gl::TEXTURE_2D,
+                    0,
+                    0,
+                    0,
+                    game_render_desc.light_w as i32,
+                    game_render_desc.light_h as i32,
+                    gl::RGBA_INTEGER,
+                    gl::UNSIGNED_BYTE,
+                    data.as_ptr() as *const c_void,
+                );
+            }
         }
 
-        // Upload tile vbo data.
-        let sprite_vertex_input = self.device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("Sprite Vertex Buffer"),
-            contents: bytemuck::cast_slice(&sprites),
-            usage: BufferUsages::VERTEX,
-        });
+        // Generate sprite vertex data.
+        let sprites = game_render_desc.sprites.len();
+        let mut sprite_xyz_data = Vec::with_capacity(sprites);
+        let mut sprite_uv_data = Vec::with_capacity(sprites);
+        let mut sprite_rgb_data = Vec::with_capacity(sprites);
+        if sprites > 0 {
+            for &SpriteRenderDesc { x, y, u, v, w, h } in &game_render_desc.sprites {
+                sprite_xyz_data.extend_from_slice(&[
+                    GlVec3(x, y, 0.),
+                    GlVec3(x + w, y, 0.),
+                    GlVec3(x + w, y + h, 0.),
+                    GlVec3(x, y + h, 0.),
+                ]);
 
-        (sprite_vertex_input, sprites.len() as u32 / 4)
-    }
+                sprite_uv_data.extend_from_slice(&[
+                    GlVec2(u, y),
+                    GlVec2(u + w, v),
+                    GlVec2(u + w, v + h),
+                    GlVec2(u, v + h),
+                ]);
 
-    fn process_tile_state(
-        &mut self,
-        game_render_desc: &GameRenderDesc,
-    ) -> (Buffer, u32, Buffer, u32) {
+                sprite_rgb_data.extend_from_slice(&[
+                    GlVec3(1., 1., 1.),
+                    GlVec3(1., 1., 1.),
+                    GlVec3(1., 1., 1.),
+                    GlVec3(1., 1., 1.),
+                ]);
+            }
+        }
+
         // Calculate tile vertex data.
         let max_tiles = (game_render_desc.tiles_w - 2) * (game_render_desc.tiles_h - 2);
-        let mut fg_vertex_tiles = Vec::with_capacity(4 * max_tiles);
-        let mut bg_vertex_tiles = Vec::with_capacity(4 * max_tiles);
+        let mut fg_tile_xyz_data = Vec::with_capacity(4 * max_tiles);
+        let mut fg_tile_uv_data = Vec::with_capacity(4 * max_tiles);
+        let mut fg_tile_mask_uv_data = Vec::with_capacity(4 * max_tiles);
+        let mut bg_tile_xyz_data = Vec::with_capacity(4 * max_tiles);
+        let mut bg_tile_uv_data = Vec::with_capacity(4 * max_tiles);
+        let mut bg_tile_mask_uv_data = Vec::with_capacity(4 * max_tiles);
         if max_tiles > 0 {
             // Calculate tile data and upload to GPU.
-            let tile_texture_properties_lookup = &TILE_TEXTURE_PROPERTIES;
+            let tile_texture_properties_lookup = &crate::shared::tile::TILE_TEXTURE_PROPERTIES;
             let stride = game_render_desc.tiles_w;
-            'calc_tiles: {
-                for y in 1..game_render_desc.tiles_h - 1 {
-                    'x: for x in 1..game_render_desc.tiles_w - 1 {
-                        let index = x + y * game_render_desc.tiles_w;
+            for y in 1..game_render_desc.tiles_h - 1 {
+                for x in 1..game_render_desc.tiles_w - 1 {
+                    let index = x + y * game_render_desc.tiles_w;
 
-                        // Fill FG.
-                        'skip_fg: {
-                            let tile_texture_properties = tile_texture_properties_lookup
-                                [game_render_desc.fg_tiles[index].0 as usize];
+                    // Skip FG if tile is None.
+                    if !matches!(game_render_desc.fg_tiles[index].0, TileKind::None) {
+                        // Get tile properties.
+                        let tile_texture_properties = tile_texture_properties_lookup
+                            [game_render_desc.fg_tiles[index].0 as usize];
 
-                            // Get texture UV.
-                            let u = tile_texture_properties.u;
-                            let v = tile_texture_properties.v;
+                        // Get texture UV.
+                        let u = tile_texture_properties.u;
+                        let v = tile_texture_properties.v;
 
-                            // If not visible, skip.
-                            if (u, v) == (0., 0.) {
-                                break 'skip_fg;
-                            }
+                        // Get depth.
+                        let depth = tile_texture_properties.depth;
 
-                            // Get depth.
-                            let depth = tile_texture_properties.depth;
+                        // Calculate position.
+                        let x = 16. * (x + game_render_desc.tiles_x) as f32;
+                        let y = 16. * (y + game_render_desc.tiles_y) as f32;
+                        let z = depth as f32;
 
-                            // Calculate position.
-                            let x = 16. * (x + game_render_desc.tiles_x) as f32;
-                            let y = 16. * (y + game_render_desc.tiles_y) as f32;
-                            let z = depth as f32;
+                        // Calculate mask UV.
+                        #[rustfmt::skip]
+                        let mask_u = [ index - stride, index - stride + 1, index + 1, index + stride + 1 ]
+                            .into_iter()
+                            .rev()
+                            .map(|index| game_render_desc.fg_tiles[index].0)
+                            .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
+                            .map(|dep| (depth > dep) as u8)
+                            .reduce(|acc, bit| (acc << 1) | bit)
+                            .map(|out| (out << 2) as f32)
+                            .unwrap();
+                        #[rustfmt::skip]
+                        let mask_v  = [index + stride, index + stride - 1, index - 1, index - stride - 1 ]
+                            .into_iter()
+                            .rev()
+                            .map(|index| game_render_desc.fg_tiles[index].0)
+                            .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
+                            .map(|dep| (depth > dep) as u8)
+                            .reduce(|acc, bit| (acc << 1) | bit)
+                            .map(|out| (out << 2) as f32)
+                            .unwrap();
 
-                            // Calculate mask UV.
-                            #[rustfmt::skip]
-                            let mask_u = [ index - stride, index - stride + 1, index + 1, index + stride + 1 ]
-                                .into_iter()
-                                .rev()
-                                .map(|index| game_render_desc.fg_tiles[index].0)
-                                .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
-                                .map(|dep| (depth > dep) as u8)
-                                .reduce(|acc, bit| (acc << 1) | bit)
-                                .map(|out| (out << 2) as f32)
-                                .unwrap();
-                            #[rustfmt::skip]
-                            let mask_v  = [index + stride, index + stride - 1, index - 1, index - stride - 1 ]
-                                .into_iter()
-                                .rev()
-                                .map(|index| game_render_desc.fg_tiles[index].0)
-                                .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
-                                .map(|dep| (depth > dep) as u8)
-                                .reduce(|acc, bit| (acc << 1) | bit)
-                                .map(|out| (out << 2) as f32)
-                                .unwrap();
+                        fg_tile_xyz_data.extend_from_slice(&[
+                            GlVec3(x - 8., y - 8., z),
+                            GlVec3(x + 16. + 8., y - 8., z),
+                            GlVec3(x + 16. + 8., y + 16. + 8., z),
+                            GlVec3(x - 8., y + 16. + 8., z),
+                        ]);
 
-                            fg_vertex_tiles.extend_from_slice(&[
-                                TileVertexInput {
-                                    tile_xyz: [x - 8., y - 8., z],
-                                    tile_uv: [u, v],
-                                    mask_uv: [mask_u, mask_v],
-                                },
-                                TileVertexInput {
-                                    tile_xyz: [x + 16. + 8., y - 8., z],
-                                    tile_uv: [u + 16., v],
-                                    mask_uv: [mask_u + 4., mask_v],
-                                },
-                                TileVertexInput {
-                                    tile_xyz: [x + 16. + 8., y + 16. + 8., z],
-                                    tile_uv: [u + 16., v + 16.],
-                                    mask_uv: [mask_u + 4., mask_v + 4.],
-                                },
-                                TileVertexInput {
-                                    tile_xyz: [x - 8., y + 16. + 8., z],
-                                    tile_uv: [u, v + 16.],
-                                    mask_uv: [mask_u, mask_v + 4.],
-                                },
-                            ]);
+                        fg_tile_uv_data.extend_from_slice(&[
+                            GlVec2(u, v),
+                            GlVec2(u + 16., v),
+                            GlVec2(u + 16., v + 16.),
+                            GlVec2(u, v + 16.),
+                        ]);
 
-                            // Skip check bg tile.
-                            continue 'x;
-                        }
+                        fg_tile_mask_uv_data.extend_from_slice(&[
+                            GlVec2(mask_u, mask_v),
+                            GlVec2(mask_u + 4., mask_v),
+                            GlVec2(mask_u + 4., mask_v + 4.),
+                            GlVec2(mask_u, mask_v + 4.),
+                        ]);
 
-                        // Fill FG.
-                        'skip_bg: {
-                            let tile_texture_properties = tile_texture_properties_lookup
-                                [game_render_desc.bg_tiles[index].0 as usize];
+                        // Skip check bg tile.
+                        continue;
+                    }
 
-                            // Get texture UV.
-                            let u = tile_texture_properties.u;
-                            let v = tile_texture_properties.v;
+                    // Skip BG if tile is None.
+                    if !matches!(game_render_desc.bg_tiles[index].0, TileKind::None) {
+                        let tile_texture_properties = tile_texture_properties_lookup
+                            [game_render_desc.bg_tiles[index].0 as usize];
 
-                            // If not visible, skip.
-                            if (u, v) == (0., 0.) {
-                                break 'skip_bg;
-                            }
+                        // Get texture UV.
+                        let u = tile_texture_properties.u;
+                        let v = tile_texture_properties.v;
 
-                            // Get depth.
-                            let depth = tile_texture_properties.depth;
+                        // Get depth.
+                        let depth = tile_texture_properties.depth;
 
-                            // Calculate position.
-                            let x = 16. * (x + game_render_desc.tiles_x) as f32;
-                            let y = 16. * (y + game_render_desc.tiles_y) as f32;
-                            let z = depth as f32;
+                        // Calculate position.
+                        let x = 16. * (x + game_render_desc.tiles_x) as f32;
+                        let y = 16. * (y + game_render_desc.tiles_y) as f32;
+                        let z = depth as f32;
 
-                            // Calculate mask UV.
-                            #[rustfmt::skip]
-                            let mask_u = [ index - stride, index - stride + 1, index + 1, index + stride + 1 ]
-                                .into_iter()
-                                .rev()
-                                .map(|index| game_render_desc.bg_tiles[index].0)
-                                .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
-                                .map(|dep| (depth > dep) as u8)
-                                .reduce(|acc, bit| (acc << 1) | bit)
-                                .map(|out| (out << 2) as f32)
-                                .unwrap();
-                            #[rustfmt::skip]
-                            let mask_v  = [index + stride, index + stride - 1, index - 1, index - stride - 1 ]
-                                .into_iter()
-                                .rev()
-                                .map(|index| game_render_desc.bg_tiles[index].0)
-                                .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
-                                .map(|dep| (depth > dep) as u8)
-                                .reduce(|acc, bit| (acc << 1) | bit)
-                                .map(|out| (out << 2) as f32)
-                                .unwrap();
+                        // Calculate mask UV.
+                        #[rustfmt::skip]
+                        let mask_u = [ index - stride, index - stride + 1, index + 1, index + stride + 1 ]
+                            .into_iter()
+                            .rev()
+                            .map(|index| game_render_desc.bg_tiles[index].0)
+                            .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
+                            .map(|dep| (depth > dep) as u8)
+                            .reduce(|acc, bit| (acc << 1) | bit)
+                            .map(|out| (out << 2) as f32)
+                            .unwrap();
+                        #[rustfmt::skip]
+                        let mask_v  = [index + stride, index + stride - 1, index - 1, index - stride - 1 ]
+                            .into_iter()
+                            .rev()
+                            .map(|index| game_render_desc.bg_tiles[index].0)
+                            .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
+                            .map(|dep| (depth > dep) as u8)
+                            .reduce(|acc, bit| (acc << 1) | bit)
+                            .map(|out| (out << 2) as f32)
+                            .unwrap();
 
-                            bg_vertex_tiles.extend_from_slice(&[
-                                TileVertexInput {
-                                    tile_xyz: [x - 8., y - 8., z],
-                                    tile_uv: [u, v],
-                                    mask_uv: [mask_u, mask_v],
-                                },
-                                TileVertexInput {
-                                    tile_xyz: [x + 16. + 8., y - 8., z],
-                                    tile_uv: [u + 16., v],
-                                    mask_uv: [mask_u + 4., mask_v],
-                                },
-                                TileVertexInput {
-                                    tile_xyz: [x + 16. + 8., y + 16. + 8., z],
-                                    tile_uv: [u + 16., v + 16.],
-                                    mask_uv: [mask_u + 4., mask_v + 4.],
-                                },
-                                TileVertexInput {
-                                    tile_xyz: [x - 8., y + 16. + 8., z],
-                                    tile_uv: [u, v + 16.],
-                                    mask_uv: [mask_u, mask_v + 4.],
-                                },
-                            ]);
+                        bg_tile_xyz_data.extend_from_slice(&[
+                            GlVec3(x - 8., y - 8., z),
+                            GlVec3(x + 16. + 8., y - 8., z),
+                            GlVec3(x + 16. + 8., y + 16. + 8., z),
+                            GlVec3(x - 8., y + 16. + 8., z),
+                        ]);
 
-                            // Skip check bg tile.
-                            continue 'x;
-                        }
+                        bg_tile_uv_data.extend_from_slice(&[
+                            GlVec2(u, v),
+                            GlVec2(u + 16., v),
+                            GlVec2(u + 16., v + 16.),
+                            GlVec2(u, v + 16.),
+                        ]);
+
+                        bg_tile_mask_uv_data.extend_from_slice(&[
+                            GlVec2(mask_u, mask_v),
+                            GlVec2(mask_u + 4., mask_v),
+                            GlVec2(mask_u + 4., mask_v + 4.),
+                            GlVec2(mask_u, mask_v + 4.),
+                        ]);
                     }
                 }
-
-                break 'calc_tiles;
-            };
+            }
         }
 
-        // Upload fg tile vbo data.
-        let fg_vertex_input = self.device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("FG Vertex Buffer"),
-            contents: bytemuck::cast_slice(&fg_vertex_tiles),
-            usage: BufferUsages::VERTEX,
-        });
+        unsafe {
+            gl::ClearColor(0., 0., 0., 1.);
+            gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+            let f32_size = size_of::<f32>() as i32;
 
-        // Upload tile vbo data.
-        let bg_vertex_input = self.device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("BG Vertex Buffer"),
-            contents: bytemuck::cast_slice(&bg_vertex_tiles),
-            usage: BufferUsages::VERTEX,
-        });
+            // BG tile rendering.
+            if !bg_tile_xyz_data.is_empty() {
+                assert!(bg_tile_xyz_data.len() == bg_tile_uv_data.len());
+                assert!(bg_tile_uv_data.len() == bg_tile_mask_uv_data.len());
 
-        (
-            fg_vertex_input,
-            fg_vertex_tiles.len() as u32 / 4,
-            bg_vertex_input,
-            bg_vertex_tiles.len() as u32 / 4,
-        )
+                // Use program.
+                gl::UseProgram(self.tile_program.0);
+
+                // Fill and attach tile xyz buffer.
+                gl::BindBuffer(gl::ARRAY_BUFFER, self.tile_xyz.0);
+                gl::BufferData(
+                    gl::ARRAY_BUFFER,
+                    (bg_tile_xyz_data.len() * size_of::<GlVec3>()) as isize,
+                    bg_tile_xyz_data.as_ptr() as *const c_void,
+                    gl::STATIC_DRAW,
+                );
+                gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, 3 * f32_size, std::ptr::null());
+                gl::EnableVertexAttribArray(0);
+
+                // Fill and attach tile_uv buffer.
+                gl::BindBuffer(gl::ARRAY_BUFFER, self.tile_uv.0);
+                gl::BufferData(
+                    gl::ARRAY_BUFFER,
+                    (bg_tile_uv_data.len() * size_of::<GlVec2>()) as isize,
+                    bg_tile_uv_data.as_ptr() as *const c_void,
+                    gl::STATIC_DRAW,
+                );
+                gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, 2 * f32_size, std::ptr::null());
+                gl::EnableVertexAttribArray(1);
+
+                // File and attach tile_mask_uv buffer.
+                gl::BindBuffer(gl::ARRAY_BUFFER, self.tile_mask_uv.0);
+                gl::BufferData(
+                    gl::ARRAY_BUFFER,
+                    (bg_tile_mask_uv_data.len() * size_of::<GlVec2>()) as isize,
+                    bg_tile_mask_uv_data.as_ptr() as *const c_void,
+                    gl::STATIC_DRAW,
+                );
+                gl::VertexAttribPointer(2, 2, gl::FLOAT, gl::FALSE, 2 * f32_size, std::ptr::null());
+                gl::EnableVertexAttribArray(2);
+
+                // Map textures to texture units.
+                gl::ActiveTexture(gl::TEXTURE0);
+                gl::BindTexture(gl::TEXTURE_2D, self.tile_texture.0);
+                gl::ActiveTexture(gl::TEXTURE1);
+                gl::BindTexture(gl::TEXTURE_2D, self.mask_texture.0);
+
+                // Attach uniforms.
+                gl::UniformMatrix3fv(0, 1, gl::FALSE, view_matrix.as_ptr());
+                gl::Uniform1i(1, 0);
+                gl::Uniform1i(2, 1);
+                gl::Uniform4f(3, 0.6, 0.6, 0.6, 1.0);
+
+                // Draw.
+                gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.quad_ibo.0);
+                gl::PrimitiveRestartIndex(u16::MAX as u32);
+                gl::DrawElements(
+                    gl::TRIANGLE_STRIP,
+                    bg_tile_xyz_data.len() as i32 / 4 * 5,
+                    gl::UNSIGNED_SHORT,
+                    std::ptr::null(),
+                );
+            }
+
+            // Sprite rendering.
+            let sprite_count = sprite_xyz_data.len();
+            if sprite_count > 0 {
+                assert_eq!(sprite_count, sprite_uv_data.len());
+                assert_eq!(sprite_count, sprite_rgb_data.len());
+
+                gl::UseProgram(self.sprite_program.0);
+
+                // Sprite xyz.
+                gl::BindBuffer(gl::ARRAY_BUFFER, self.sprite_xyz.0);
+                gl::BufferData(
+                    gl::ARRAY_BUFFER,
+                    (sprite_count * size_of::<GlVec3>()) as isize,
+                    sprite_xyz_data.as_ptr() as *const c_void,
+                    gl::STATIC_DRAW,
+                );
+                gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, 3 * f32_size, std::ptr::null());
+                gl::EnableVertexAttribArray(0);
+
+                // Sprite uv.
+                gl::BindBuffer(gl::ARRAY_BUFFER, self.sprite_uv.0);
+                gl::BufferData(
+                    gl::ARRAY_BUFFER,
+                    (sprite_count * size_of::<GlVec2>()) as isize,
+                    sprite_uv_data.as_ptr() as *const c_void,
+                    gl::STATIC_DRAW,
+                );
+                gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, 2 * f32_size, std::ptr::null());
+                gl::EnableVertexAttribArray(1);
+
+                // Sprite uv.
+                gl::BindBuffer(gl::ARRAY_BUFFER, self.sprite_rgb.0);
+                gl::BufferData(
+                    gl::ARRAY_BUFFER,
+                    (sprite_count * size_of::<GlVec3>()) as isize,
+                    sprite_rgb_data.as_ptr() as *const c_void,
+                    gl::STATIC_DRAW,
+                );
+                gl::VertexAttribPointer(2, 3, gl::FLOAT, gl::FALSE, 3 * f32_size, std::ptr::null());
+                gl::EnableVertexAttribArray(2);
+
+                // Attach uniforms.
+                let model_matrix = Mat3::identity();
+                gl::UniformMatrix3fv(0, 1, gl::FALSE, view_matrix.as_ptr());
+                gl::UniformMatrix3fv(1, 1, gl::FALSE, model_matrix.as_ptr());
+
+                // Draw.
+                gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.quad_ibo.0);
+                gl::PrimitiveRestartIndex(u16::MAX as u32);
+                gl::DrawElements(
+                    gl::TRIANGLE_STRIP,
+                    sprite_count as i32 / 4 * 5,
+                    gl::UNSIGNED_SHORT,
+                    std::ptr::null(),
+                );
+            }
+
+            // FG tile rendering.
+            if !fg_tile_xyz_data.is_empty() {
+                assert_eq!(fg_tile_xyz_data.len(), fg_tile_uv_data.len());
+                assert_eq!(fg_tile_xyz_data.len(), fg_tile_mask_uv_data.len());
+
+                // Use program.
+                gl::UseProgram(self.tile_program.0);
+
+                // Fill and attach tile xyz buffer.
+                gl::BindBuffer(gl::ARRAY_BUFFER, self.tile_xyz.0);
+                gl::BufferData(
+                    gl::ARRAY_BUFFER,
+                    (fg_tile_xyz_data.len() * size_of::<GlVec3>()) as isize,
+                    fg_tile_xyz_data.as_ptr() as *const c_void,
+                    gl::STATIC_DRAW,
+                );
+                gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, 3 * f32_size, std::ptr::null());
+                gl::EnableVertexAttribArray(0);
+
+                // Fill and attach tile_uv buffer.
+                gl::BindBuffer(gl::ARRAY_BUFFER, self.tile_uv.0);
+                gl::BufferData(
+                    gl::ARRAY_BUFFER,
+                    (fg_tile_uv_data.len() * size_of::<GlVec2>()) as isize,
+                    fg_tile_uv_data.as_ptr() as *const c_void,
+                    gl::STATIC_DRAW,
+                );
+                gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, 2 * f32_size, std::ptr::null());
+                gl::EnableVertexAttribArray(1);
+
+                // File and attach tile_mask_uv buffer.
+                gl::BindBuffer(gl::ARRAY_BUFFER, self.tile_mask_uv.0);
+                gl::BufferData(
+                    gl::ARRAY_BUFFER,
+                    (fg_tile_mask_uv_data.len() * size_of::<GlVec2>()) as isize,
+                    fg_tile_mask_uv_data.as_ptr() as *const c_void,
+                    gl::STATIC_DRAW,
+                );
+                gl::VertexAttribPointer(2, 2, gl::FLOAT, gl::FALSE, 2 * f32_size, std::ptr::null());
+                gl::EnableVertexAttribArray(2);
+
+                // Map textures to texture units.
+                gl::ActiveTexture(gl::TEXTURE0);
+                gl::BindTexture(gl::TEXTURE_2D, self.tile_texture.0);
+                gl::ActiveTexture(gl::TEXTURE1);
+                gl::BindTexture(gl::TEXTURE_2D, self.mask_texture.0);
+
+                // Attach uniforms.
+                gl::UniformMatrix3fv(0, 1, gl::FALSE, view_matrix.as_ptr());
+                gl::Uniform1i(1, 0);
+                gl::Uniform1i(2, 1);
+                gl::Uniform4f(3, 1., 1., 1., 1.);
+
+                // Draw.
+                gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.quad_ibo.0);
+                gl::PrimitiveRestartIndex(u16::MAX as u32);
+                gl::DrawElements(
+                    gl::TRIANGLE_STRIP,
+                    fg_tile_xyz_data.len() as i32 / 4 * 5,
+                    gl::UNSIGNED_SHORT,
+                    std::ptr::null(),
+                );
+            }
+
+            // Light rendering.
+            {
+                // Use program.
+                gl::UseProgram(self.light_program.0);
+
+                // Map textures to texture units.
+                gl::ActiveTexture(gl::TEXTURE0);
+                gl::BindTexture(gl::TEXTURE_2D, self.light_texture.0);
+
+                // Attach uniforms.
+                gl::UniformMatrix3fv(0, 1, gl::FALSE, view_matrix.as_ptr());
+                gl::Uniform4f(
+                    1,
+                    game_render_desc.light_x as f32 * 16.,
+                    game_render_desc.light_y as f32 * 16.,
+                    game_render_desc.light_w as f32 * 16.,
+                    game_render_desc.light_h as f32 * 16.,
+                );
+                gl::Uniform2f(
+                    2,
+                    game_render_desc.light_w as f32,
+                    game_render_desc.light_h as f32,
+                );
+                gl::Uniform1i(3, 0);
+
+                // Draw.
+                gl::BlendFunc(gl::DST_COLOR, gl::ZERO);
+                gl::BlendEquation(gl::FUNC_ADD);
+                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.quad_ibo.0);
+                gl::DrawElements(gl::TRIANGLE_STRIP, 4, gl::UNSIGNED_SHORT, std::ptr::null());
+            }
+        }
+
+        self.surface.swap_buffers(&self.context).unwrap();
     }
+}
+
+pub fn gl_create_context(window: &Window) -> (NotCurrentContext, Surface<WindowSurface>) {
+    // Create context from window.
+    let rwh = window.window.window_handle().ok().map(|wh| wh.as_raw());
+    let context_attributes = ContextAttributesBuilder::default()
+        .with_context_api(ContextApi::OpenGl(Some(Version::new(3, 3))))
+        .build(rwh);
+    let gl_display = window.gl_config.display();
+    let context = unsafe {
+        gl_display
+            .create_context(&window.gl_config, &context_attributes)
+            .unwrap()
+    };
+
+    // Surface?
+    let surface_attributes = window
+        .window
+        .build_surface_attributes(Default::default())
+        .unwrap();
+    let surface = unsafe {
+        window
+            .gl_config
+            .display()
+            .create_window_surface(&window.gl_config, &surface_attributes)
+            .unwrap()
+    };
+
+    unsafe {
+        gl::load_with(|s| {
+            let s = std::ffi::CString::new(s).unwrap();
+            surface.display().get_proc_address(s.as_c_str()).cast()
+        });
+    }
+
+    (context, surface)
 }

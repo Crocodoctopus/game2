@@ -30,7 +30,7 @@ pub fn resolve_generic_tile_collision_x(
     last_x: f32,
     last_y: f32,
     tiles: &TileMap,
-    mut f: impl FnMut(TileCollisionEvent, usize, usize, &Tile),
+    mut f: impl FnMut(TileCollisionEvent, usize, usize, &TileKind),
 ) {
     // Calculate (x1..x2) based on distance moved.
     let (x1, x2) = if bounds.x > last_x {
@@ -58,14 +58,10 @@ pub fn resolve_generic_tile_collision_x(
                 // Right wall hit.
                 if bounds.x > last_x {
                     f(TileCollisionEvent::RightWall, x, y, &tile);
-                    //flags |= tile_collision_flags::HIT_WALL;
-                    //bounds.x = (x * TILE_SIZE) as f32 - bounds.width;
                 }
                 // Left wall hit.
                 if bounds.x < last_x {
                     f(TileCollisionEvent::LeftWall, x, y, &tile);
-                    //flags |= tile_collision_flags::HIT_WALL;
-                    //bounds.x = ((x + 1) * TILE_SIZE) as f32;
                 }
             }
         }
@@ -77,7 +73,7 @@ pub fn resolve_generic_tile_collision_y(
     last_x: f32,
     last_y: f32,
     tiles: &TileMap,
-    mut f: impl FnMut(TileCollisionEvent, usize, usize, &Tile),
+    mut f: impl FnMut(TileCollisionEvent, usize, usize, &TileKind),
 ) {
     // Calculate (x1..x2).
     let x1 = last_x as usize / TILE_SIZE;
@@ -105,16 +101,10 @@ pub fn resolve_generic_tile_collision_y(
                 // Floor hit.
                 if bounds.y > last_y {
                     f(TileCollisionEvent::Floor, x, y, &tile);
-                    //flags |= tile_collision_flags::HIT_WALL;
-                    //bounds.y = (y * TILE_SIZE) as f32 - bounds.height;
-                    //bounds.dy = 0.;
                 }
                 // Ceiling hit.
                 if bounds.y < last_y {
                     f(TileCollisionEvent::Ceiling, x, y, &tile);
-                    //flags |= tile_collision_flags::HIT_FLOOR;
-                    //bounds.y = ((y + 1) * TILE_SIZE) as f32;
-                    //bounds.dy *= 0.50;
                 }
             }
         }

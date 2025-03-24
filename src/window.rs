@@ -1,10 +1,11 @@
 pub struct Window {
     pub window: winit::window::Window,
+    pub gl_config: glutin::config::Config,
 }
 
 impl Window {
-    pub fn new(window: winit::window::Window) -> Self {
-        Self { window }
+    pub fn new(window: winit::window::Window, gl_config: glutin::config::Config) -> Self {
+        Self { window, gl_config }
     }
 
     pub fn swap(&self) {

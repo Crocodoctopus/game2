@@ -1,5 +1,6 @@
 use crate::shared::humanoid::{Humanoid, HumanoidId};
-use crate::shared::tile::{Tile, CHUNK_AREA};
+use crate::shared::item::*;
+use crate::shared::tile::*;
 use bitcode::{decode, encode, Decode, DecodeOwned, Encode};
 use std::collections::HashMap;
 
@@ -46,18 +47,17 @@ pub enum ServerNetMessage {
     ChunkSync {
         x: u16,
         y: u16,
-        fg_tiles: [Tile; CHUNK_AREA],
-        bg_tiles: [Tile; CHUNK_AREA],
+        fg_tiles: [TileKind; CHUNK_AREA],
+        bg_tiles: [TileKind; CHUNK_AREA],
     },
 
     TileSync {
         index: u32,
-        tile: Tile,
+        tile: TileKind,
     },
 
-    ItemSpawn {
-        x: u32,
-        y: u32,
+    ItemSync {
+        items: Box<[(ItemKind, f32, f32)]>,
     },
 
     HumanoidSync {

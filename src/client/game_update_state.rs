@@ -1,4 +1,5 @@
-use crate::client::{log, GameRenderDesc, SpriteRenderDesc, TileRenderDesc};
+use crate::client::game_render_desc::*;
+use crate::client::log;
 use crate::net::{ClientNetManager, NetEventKind};
 use crate::shared::humanoid::*;
 use crate::shared::light::*;
@@ -61,8 +62,8 @@ impl GameUpdateState {
         let mut world_w = 0;
         let mut world_h = 0;
         let mut chunks_loaded: Box<[bool]> = Box::new([]);
-        let mut fg_tiles: Box<[Tile]> = Box::new([]);
-        let mut bg_tiles: Box<[Tile]> = Box::new([]);
+        let mut fg_tiles: Box<[TileKind]> = Box::new([]);
+        let mut bg_tiles: Box<[TileKind]> = Box::new([]);
 
         let mut player_id = HumanoidId::new();
         let humanoids = HashMap::new();
@@ -101,10 +102,10 @@ impl GameUpdateState {
                                         world_h = height as usize;
                                         chunks_loaded = vec![false; world_w * world_h / CHUNK_AREA]
                                             .into_boxed_slice();
-                                        fg_tiles =
-                                            vec![Tile::None; world_w * world_h].into_boxed_slice();
-                                        bg_tiles =
-                                            vec![Tile::None; world_w * world_h].into_boxed_slice();
+                                        fg_tiles = vec![TileKind::None; world_w * world_h]
+                                            .into_boxed_slice();
+                                        bg_tiles = vec![TileKind::None; world_w * world_h]
+                                            .into_boxed_slice();
                                     }
 
                                     ServerNetMessage::ChunkSync {
@@ -387,22 +388,22 @@ impl GameUpdateState {
                         '1' if bit == 1 => {
                             let index =
                                 self.mouse_x / 16 + self.mouse_y / 16 * self.fg_tiles.width();
-                            self.fg_tiles[index] = Tile::RedTorch;
+                            self.fg_tiles[index] = TileKind::RedTorch;
                         }
                         '2' if bit == 1 => {
                             let index =
                                 self.mouse_x / 16 + self.mouse_y / 16 * self.fg_tiles.width();
-                            self.fg_tiles[index] = Tile::GreenTorch;
+                            self.fg_tiles[index] = TileKind::GreenTorch;
                         }
                         '3' if bit == 1 => {
                             let index =
                                 self.mouse_x / 16 + self.mouse_y / 16 * self.fg_tiles.width();
-                            self.fg_tiles[index] = Tile::BlueTorch;
+                            self.fg_tiles[index] = TileKind::BlueTorch;
                         }
                         '4' if bit == 1 => {
                             let index =
                                 self.mouse_x / 16 + self.mouse_y / 16 * self.fg_tiles.width();
-                            self.fg_tiles[index] = Tile::WhiteTorch;
+                            self.fg_tiles[index] = TileKind::WhiteTorch;
                         }
                         _ => {}
                     };
@@ -498,7 +499,7 @@ fn calculate_light_map(game: &mut GameUpdateState) -> (usize, usize, Lightmap, L
             let bg_tile = game.bg_tiles[world_index];
 
             // Special case (None, None).
-            if fg_tile == Tile::None && bg_tile == Tile::None {
+            if fg_tile == TileKind::None && bg_tile == TileKind::None {
                 r_channel[light_index] = LIGHT_MAX;
                 g_channel[light_index] = LIGHT_MAX;
                 b_channel[light_index] = LIGHT_MAX;
@@ -509,13 +510,13 @@ fn calculate_light_map(game: &mut GameUpdateState) -> (usize, usize, Lightmap, L
             }
 
             // Special case (None, Some).
-            if fg_tile == Tile::None && bg_tile != Tile::None {
+            if fg_tile == TileKind::None && bg_tile != TileKind::None {
                 fademap[light_index] = FADE_MIN;
                 continue;
             }
 
             // Case (Some, _).
-            if fg_tile != Tile::None {
+            if fg_tile != TileKind::None {
                 let fg_light_property = tile_light_property_map[fg_tile as usize];
 
                 //
@@ -561,8 +562,10 @@ fn clone_visible_tile_map(
     let y1 = (game.viewport_y - 4) / 16 - 1;
     let x2 = (game.viewport_x + game.viewport_w + 4 + 15) / 16 + 1;
     let y2 = (game.viewport_y + game.viewport_h + 4 + 15) / 16 + 1;
-    let mut fg_tiles = vec![TileRenderDesc(Tile::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
-    let mut bg_tiles = vec![TileRenderDesc(Tile::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
+    let mut fg_tiles =
+        vec![TileRenderDesc(TileKind::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
+    let mut bg_tiles =
+        vec![TileRenderDesc(TileKind::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
     let w = x2 - x1;
     let h = y2 - y1;
     for y in 0..h {

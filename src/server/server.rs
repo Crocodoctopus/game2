@@ -3,6 +3,71 @@ use crate::server::GameUpdateState;
 use crate::time::timestamp_as_usecs;
 use std::path::Path;
 
+pub fn run_server(root: &'static Path, net_manager: ServerNetManager) -> ! {
+    // Update.
+    let mut update_ts = timestamp_as_usecs();
+    let mut update_state = GameUpdateState::new(root, net_manager);
+
+    // Diagnostic.
+    let mut update_n = 0;
+    let mut prestep_acc = 0;
+    let mut step_acc = 0;
+    let mut poststep_acc = 0;
+
+    //let frametime = 33_332_u64;
+    let frametime = 16_666_u64;
+
+    //
+    loop {
+        // Wait for enough time to process a frame.
+        let next_timestamp = crate::time::wait(update_ts + frametime, 1_000);
+        assert!(next_timestamp - update_ts >= frametime,);
+
+        // Prestep.
+        let ts = timestamp_as_usecs();
+        {
+            update_state.prestep(update_ts);
+        }
+        prestep_acc += timestamp_as_usecs() - ts;
+
+        // Step.
+        let ts = timestamp_as_usecs();
+        {
+            while update_ts + frametime <= next_timestamp {
+                update_state.step(update_ts, frametime);
+                update_ts += frametime;
+                update_n += 1;
+            }
+        }
+        step_acc += timestamp_as_usecs() - ts;
+
+        // Step.
+        let ts = timestamp_as_usecs();
+        {
+            update_state.poststep(update_ts);
+        }
+        poststep_acc += timestamp_as_usecs() - ts;
+
+        // Time printing.
+        if update_n > 60 * 30 {
+            println!(
+                    "\x1b[91m[Server] Update total: {:.2}ms.\n  Prestep: {:.2}ms.\n  Step: {:.2}ms.\n  Poststep: {:.2}ms.\x1b[0m",
+                    ((prestep_acc + step_acc + poststep_acc)
+                        / update_n) as f32
+                        * 0.001,
+                    (prestep_acc / update_n) as f32 * 0.001,
+                    (step_acc / update_n) as f32 * 0.001,
+                    (poststep_acc / update_n) as f32 * 0.001,
+                );
+            prestep_acc = 0;
+            step_acc = 0;
+            poststep_acc = 0;
+            update_n = 0;
+        }
+    }
+}
+
+/*
 pub struct Server {
     // Update.
     update_ts: u64,
@@ -87,3 +152,4 @@ impl Server {
         }
     }
 }
+*/

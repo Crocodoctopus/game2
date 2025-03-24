@@ -1,11 +1,9 @@
 use crate::shared::misc::Aabb;
 use crate::shared::physics::*;
 use crate::shared::tile::*;
-use crate::shared::tile_collision;
 use crate::shared::tile_collision::*;
 use bitcode::{Decode, Encode};
 use std::collections::HashMap;
-use tile_collision_flags::HIT_FLOOR;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default, Encode, Decode, Hash)]
 pub struct HumanoidId(u32);
@@ -125,8 +123,8 @@ pub fn update_humanoid_ais(
                         let y = (humanoid.bounds.y + humanoid.bounds.height) as usize / TILE_SIZE;
                         let t0 = tiles[(x, y)];
                         let t1 = tiles[(x + 1, y)];
-                        if matches!(t0, Tile::None)
-                            && matches!(t1, Tile::None)
+                        if matches!(t0, TileKind::None)
+                            && matches!(t1, TileKind::None)
                             && (humanoid.flags & tile_collision_flags::HIT_FLOOR > 0)
                         {
                             humanoid.input.jump_queue |= 1;
@@ -143,9 +141,9 @@ pub fn update_humanoid_ais(
                         let y =
                             (humanoid.bounds.y + humanoid.bounds.height - 1.) as usize / TILE_SIZE;
                         let t0 = tiles[(x, y)];
-                        let t1 = Tile::Dirt; // tiles[x + (y - 1) * stride];
-                        if !matches!(t0, Tile::None)
-                            && !matches!(t1, Tile::None)
+                        let t1 = TileKind::Dirt; // tiles[x + (y - 1) * stride];
+                        if !matches!(t0, TileKind::None)
+                            && !matches!(t1, TileKind::None)
                             && (humanoid.flags & tile_collision_flags::HIT_FLOOR > 0)
                         {
                             humanoid.input.jump_queue |= 1;

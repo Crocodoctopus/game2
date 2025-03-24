@@ -16,11 +16,11 @@ pub const CHUNK_LOAD_HEIGHT: usize = 6;
 pub struct TileMap {
     width: usize,
     height: usize,
-    pub data: Box<[Tile]>,
+    pub data: Box<[TileKind]>,
 }
 
 impl std::ops::Index<usize> for TileMap {
-    type Output = Tile;
+    type Output = TileKind;
     fn index(&self, i: usize) -> &Self::Output {
         &self.data[i]
     }
@@ -33,7 +33,7 @@ impl std::ops::IndexMut<usize> for TileMap {
 }
 
 impl std::ops::Index<(usize, usize)> for TileMap {
-    type Output = Tile;
+    type Output = TileKind;
     fn index(&self, (x, y): (usize, usize)) -> &Self::Output {
         &self.data[x + y * self.width]
     }
@@ -46,7 +46,7 @@ impl std::ops::IndexMut<(usize, usize)> for TileMap {
 }
 
 impl TileMap {
-    pub fn from_data(width: usize, height: usize, data: Box<[Tile]>) -> Self {
+    pub fn from_data(width: usize, height: usize, data: Box<[TileKind]>) -> Self {
         Self {
             width,
             height,
@@ -65,7 +65,7 @@ impl TileMap {
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Encode, Decode)]
-pub enum Tile {
+pub enum TileKind {
     None = 0,
     Dirt,
     Stone,
@@ -80,7 +80,7 @@ pub enum Tile {
     SIZE,
 }
 
-const TILE_COUNT: usize = Tile::SIZE as usize;
+const TILE_COUNT: usize = TileKind::SIZE as usize;
 
 lazy_static! {
     pub static ref TILE_LIGHT_PROPERTIES: [TileLightProperty; TILE_COUNT] =
@@ -106,31 +106,31 @@ impl TileLightProperty {
         }; TILE_COUNT];
 
         // Fill.
-        map[Tile::Dirt as usize] = Self {
+        map[TileKind::Dirt as usize] = Self {
             fade: FADE_SOLID,
             light: Brightness::clamp3(0, 0, 0),
         };
-        map[Tile::Stone as usize] = Self {
+        map[TileKind::Stone as usize] = Self {
             fade: FADE_SOLID,
             light: Brightness::clamp3(0, 0, 0),
         };
-        map[Tile::DenseStone as usize] = Self {
+        map[TileKind::DenseStone as usize] = Self {
             fade: FADE_DENSE,
             light: Brightness::clamp3(0, 0, 0),
         };
-        map[Tile::RedTorch as usize] = Self {
+        map[TileKind::RedTorch as usize] = Self {
             fade: FADE_MIN,
             light: Brightness::clamp3(255, 0, 0),
         };
-        map[Tile::GreenTorch as usize] = Self {
+        map[TileKind::GreenTorch as usize] = Self {
             fade: FADE_MIN,
             light: Brightness::clamp3(0, 255, 0),
         };
-        map[Tile::BlueTorch as usize] = Self {
+        map[TileKind::BlueTorch as usize] = Self {
             fade: FADE_MIN,
             light: Brightness::clamp3(0, 0, 255),
         };
-        map[Tile::WhiteTorch as usize] = Self {
+        map[TileKind::WhiteTorch as usize] = Self {
             fade: FADE_MIN,
             light: Brightness::clamp3(6, 38, 255),
         };
@@ -156,17 +156,17 @@ impl TileTextureProperty {
         }; TILE_COUNT];
 
         // Fill.
-        map[Tile::Dirt as usize] = Self {
+        map[TileKind::Dirt as usize] = Self {
             u: 16.,
             v: 0.,
             depth: 1,
         };
-        map[Tile::Stone as usize] = Self {
+        map[TileKind::Stone as usize] = Self {
             u: 32.,
             v: 0.,
             depth: 2,
         };
-        map[Tile::DenseStone as usize] = Self {
+        map[TileKind::DenseStone as usize] = Self {
             u: 48.,
             v: 0.,
             depth: 3,
@@ -187,7 +187,7 @@ impl TilePhysicsProperty {
         let mut map = [Self { solid: true }; TILE_COUNT];
 
         // Fill.
-        map[Tile::None as usize] = Self { solid: false };
+        map[TileKind::None as usize] = Self { solid: false };
 
         return map;
     }

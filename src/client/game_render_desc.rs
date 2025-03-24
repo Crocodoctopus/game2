@@ -1,5 +1,5 @@
 use crate::shared::light::Brightness;
-use crate::shared::tile::Tile;
+use crate::shared::tile::TileKind;
 
 #[derive(Copy, Clone, Debug)]
 pub struct SpriteRenderDesc {
@@ -12,7 +12,7 @@ pub struct SpriteRenderDesc {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct TileRenderDesc(pub Tile);
+pub struct TileRenderDesc(pub TileKind);
 
 #[derive(Clone, Debug)]
 pub struct GameRenderDesc {

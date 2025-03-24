@@ -9,11 +9,11 @@ pub struct TileDamage {
 pub fn register_tile_hit(
     tile_damages: &mut HashMap<u32, TileDamage>,
     index: u32,
-    tile: Tile,
+    tile: TileKind,
     timestamp: u64, // in us
 ) {
     // Skip None.
-    if matches!(tile, Tile::None) {
+    if matches!(tile, TileKind::None) {
         return;
     }
 

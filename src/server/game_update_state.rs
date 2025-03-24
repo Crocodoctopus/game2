@@ -1,6 +1,7 @@
 use crate::net::{NetEventKind, ServerNetManager};
 use crate::server::log;
 use crate::shared::humanoid::*;
+use crate::shared::item::*;
 use crate::shared::misc::Aabb;
 use crate::shared::net::*;
 use crate::shared::physics::*;
@@ -36,52 +37,56 @@ pub struct GameUpdateState {
     // Players.
     humanoid_id_counter: HumanoidId,
     humanoids: HashMap<HumanoidId, Humanoid>,
+
+    // Floor items.
+    item_id_counter: u32,
+    items: HashMap<u32, Item>,
 }
 
 impl GameUpdateState {
     pub fn new(_root: &'static Path, net_manager: ServerNetManager) -> Self {
         let world_w = 8400;
         let world_h = 2400;
-        let mut fg_tiles = vec![Tile::None; world_w * world_h].into_boxed_slice();
-        let mut bg_tiles = vec![Tile::None; world_w * world_h].into_boxed_slice();
+        let mut fg_tiles = vec![TileKind::None; world_w * world_h].into_boxed_slice();
+        let mut bg_tiles = vec![TileKind::None; world_w * world_h].into_boxed_slice();
         for y in 0..world_h {
             for x in 0..world_w {
                 let index = x + y * world_w;
 
                 if y == 0 || y == world_h - 1 || x == 0 || x == world_w - 1 {
-                    fg_tiles[index] = Tile::Dirt;
-                    bg_tiles[index] = Tile::Dirt;
+                    fg_tiles[index] = TileKind::Dirt;
+                    bg_tiles[index] = TileKind::Dirt;
                     continue;
                 }
 
                 if y < 102 {
-                    fg_tiles[index] = Tile::None;
-                    bg_tiles[index] = Tile::None;
+                    fg_tiles[index] = TileKind::None;
+                    bg_tiles[index] = TileKind::None;
                     continue;
                 }
 
                 if y < 102 + 5 {
-                    fg_tiles[index] = Tile::Dirt;
-                    bg_tiles[index] = Tile::Dirt;
+                    fg_tiles[index] = TileKind::Dirt;
+                    bg_tiles[index] = TileKind::Dirt;
                     continue;
                 }
 
                 if y < 102 + 15 {
-                    fg_tiles[index] = Tile::Stone;
-                    bg_tiles[index] = Tile::Stone;
+                    fg_tiles[index] = TileKind::Stone;
+                    bg_tiles[index] = TileKind::Stone;
                     continue;
                 }
 
-                fg_tiles[index] = Tile::DenseStone;
-                bg_tiles[index] = Tile::DenseStone;
+                fg_tiles[index] = TileKind::DenseStone;
+                bg_tiles[index] = TileKind::DenseStone;
             }
         }
-        fg_tiles[108 + 102 * world_w] = Tile::None;
-        fg_tiles[109 + 102 * world_w] = Tile::None;
-        fg_tiles[107 + 102 * world_w] = Tile::None;
-        fg_tiles[106 + 102 * world_w] = Tile::None;
-        fg_tiles[107 + 103 * world_w] = Tile::None;
-        fg_tiles[106 + 103 * world_w] = Tile::None;
+        fg_tiles[108 + 102 * world_w] = TileKind::None;
+        fg_tiles[109 + 102 * world_w] = TileKind::None;
+        fg_tiles[107 + 102 * world_w] = TileKind::None;
+        fg_tiles[106 + 102 * world_w] = TileKind::None;
+        fg_tiles[107 + 103 * world_w] = TileKind::None;
+        fg_tiles[106 + 103 * world_w] = TileKind::None;
 
         let mut humanoid_id_counter = HumanoidId::new();
         let mut humanoids = HashMap::new();
@@ -121,6 +126,9 @@ impl GameUpdateState {
 
             humanoid_id_counter,
             humanoids,
+
+            item_id_counter: 0,
+            items: HashMap::new(),
         }
     }
 
@@ -142,8 +150,11 @@ impl GameUpdateState {
         // Humanoid physics and collision pass.
         update_humanoid_physics(&mut self.humanoids, frametime, &self.fg_tiles);
 
-        //
+        // Process tile damages.
         let destroyed_tiles = update_tile_damages(&mut self.tile_damages, timestamp);
+
+        // Spawn items from destroyed tiles.
+        for destroyed_tile in &destroyed_tiles {}
 
         // Temp tile sync stuff
         {
@@ -152,10 +163,10 @@ impl GameUpdateState {
                 &destroyed_tiles
                     .into_iter()
                     .map(|index| {
-                        self.fg_tiles[index as usize] = Tile::None;
+                        self.fg_tiles[index as usize] = TileKind::None;
                         ServerNetMessage::TileSync {
                             index,
-                            tile: Tile::None,
+                            tile: TileKind::None,
                         }
                     })
                     .collect::<Box<[_]>>(),
@@ -253,8 +264,8 @@ impl GameUpdateState {
                             let cy = y as usize;
 
                             // Clone the chunk.
-                            let mut fg_tiles = [Tile::None; CHUNK_AREA];
-                            let mut bg_tiles = [Tile::None; CHUNK_AREA];
+                            let mut fg_tiles = [TileKind::None; CHUNK_AREA];
+                            let mut bg_tiles = [TileKind::None; CHUNK_AREA];
                             for y in 0..CHUNK_SIZE {
                                 for x in 0..CHUNK_SIZE {
                                     let src_index = x
@@ -331,8 +342,8 @@ impl GameUpdateState {
                             for cy in y1..y2 {
                                 for cx in x1..x2 {
                                     let offset = (cx + cy * self.fg_tiles.width()) * CHUNK_SIZE;
-                                    let mut fg_tiles = [Tile::None; CHUNK_AREA];
-                                    let mut bg_tiles = [Tile::None; CHUNK_AREA];
+                                    let mut fg_tiles = [TileKind::None; CHUNK_AREA];
+                                    let mut bg_tiles = [TileKind::None; CHUNK_AREA];
                                     for y in 0..CHUNK_SIZE {
                                         for x in 0..CHUNK_SIZE {
                                             let src_index = x + y * self.fg_tiles.width();
