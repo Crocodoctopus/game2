@@ -84,11 +84,11 @@ const TILE_COUNT: usize = TileKind::SIZE as usize;
 
 lazy_static! {
     pub static ref TILE_LIGHT_PROPERTIES: [TileLightProperty; TILE_COUNT] =
-        TileLightProperty::gen();
+        TileLightProperty::generate();
     pub static ref TILE_TEXTURE_PROPERTIES: [TileTextureProperty; TILE_COUNT] =
-        TileTextureProperty::gen();
+        TileTextureProperty::generate();
     pub static ref TILE_PHYSICS_PROPERTIES: [TilePhysicsProperty; TILE_COUNT] =
-        TilePhysicsProperty::gen();
+        TilePhysicsProperty::generate();
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -98,7 +98,7 @@ pub struct TileLightProperty {
 }
 
 impl TileLightProperty {
-    fn gen() -> [Self; TILE_COUNT] {
+    fn generate() -> [Self; TILE_COUNT] {
         // Generate default map.
         let mut map = [Self {
             fade: FADE_MIN,
@@ -147,7 +147,7 @@ pub struct TileTextureProperty {
 }
 
 impl TileTextureProperty {
-    fn gen() -> [Self; TILE_COUNT] {
+    fn generate() -> [Self; TILE_COUNT] {
         // Generate default map.
         let mut map = [Self {
             u: 0.,
@@ -182,7 +182,7 @@ pub struct TilePhysicsProperty {
 }
 
 impl TilePhysicsProperty {
-    fn gen() -> [Self; TILE_COUNT] {
+    fn generate() -> [Self; TILE_COUNT] {
         // Generate default map.
         let mut map = [Self { solid: true }; TILE_COUNT];
 

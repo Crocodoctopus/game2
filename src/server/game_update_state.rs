@@ -1,5 +1,6 @@
 use crate::net::{NetEventKind, ServerNetManager};
 use crate::server::log;
+use crate::shared::GlobalId;
 use crate::shared::humanoid::*;
 use crate::shared::item::*;
 use crate::shared::misc::Aabb;
@@ -20,11 +21,14 @@ pub struct Connection {
     disconnect: bool,
 
     // The ID this connection owns.
-    id: Option<HumanoidId>,
+    id: Option<GlobalId>,
     // Chunk Reqs in flight
 }
 
 pub struct GameUpdateState {
+    // State.
+    id_counter: GlobalId,
+
     // Net manager.
     net_manager: ServerNetManager,
     connections: HashMap<SocketAddr, Connection>,
@@ -32,15 +36,13 @@ pub struct GameUpdateState {
     // Tiles.
     fg_tiles: TileMap,
     bg_tiles: TileMap,
-    tile_damages: HashMap<u32, TileDamage>,
+    tile_damages: HashMap<(u16, u16), TileDamage>,
 
     // Players.
-    humanoid_id_counter: HumanoidId,
-    humanoids: HashMap<HumanoidId, Humanoid>,
+    humanoids: HashMap<GlobalId, Humanoid>,
 
     // Floor items.
-    item_id_counter: u32,
-    items: HashMap<u32, Item>,
+    items: HashMap<GlobalId, Item>,
 }
 
 impl GameUpdateState {
@@ -88,14 +90,15 @@ impl GameUpdateState {
         fg_tiles[107 + 103 * world_w] = TileKind::None;
         fg_tiles[106 + 103 * world_w] = TileKind::None;
 
-        let mut humanoid_id_counter = HumanoidId::new();
+        let mut id_counter = GlobalId::new();
+
         let mut humanoids = HashMap::new();
         let spawn_x = 100 * TILE_SIZE;
         let spawn_y = 100 * TILE_SIZE - 32;
 
         // Zomble
         humanoids.insert(
-            humanoid_id_counter.next(),
+            id_counter.next(),
             Humanoid {
                 bounds: Aabb {
                     x: spawn_x as f32 + 256.,
@@ -117,6 +120,8 @@ impl GameUpdateState {
         );
 
         Self {
+            id_counter,
+
             net_manager,
             connections: HashMap::new(),
 
@@ -124,10 +129,8 @@ impl GameUpdateState {
             bg_tiles: TileMap::from_data(world_w, world_h, bg_tiles),
             tile_damages: <_>::default(),
 
-            humanoid_id_counter,
             humanoids,
 
-            item_id_counter: 0,
             items: HashMap::new(),
         }
     }
@@ -154,7 +157,35 @@ impl GameUpdateState {
         let destroyed_tiles = update_tile_damages(&mut self.tile_damages, timestamp);
 
         // Spawn items from destroyed tiles.
-        for destroyed_tile in &destroyed_tiles {}
+        for (x, y) in &destroyed_tiles {
+            let (x, y) = (*x as usize, *y as usize);
+            let stride = self.fg_tiles.width();
+            self.items.insert(
+                self.id_counter.next(),
+                Item {
+                    bounds: Aabb {
+                        x: (x * TILE_SIZE) as f32,
+                        y: (y * TILE_SIZE) as f32,
+                        width: 16.,
+                        height: 16.,
+                    },
+                    last_x: (x * TILE_SIZE) as f32,
+                    last_y: (y * TILE_SIZE) as f32,
+                    physics: GenericPhysics {
+                        dx: 0.,
+                        dy: 0.,
+                        ddx: 0.,
+                        ddy: 0.,
+                    },
+                    flags: 0,
+                    kind: ItemKind::Tile(self.fg_tiles[x + y * stride]),
+                    count: 1,
+                },
+            );
+        }
+
+        //
+        update_item_physics(&mut self.items, frametime, &self.fg_tiles);
 
         // Temp tile sync stuff
         {
@@ -162,10 +193,12 @@ impl GameUpdateState {
             let tiles_se = serialize(
                 &destroyed_tiles
                     .into_iter()
-                    .map(|index| {
-                        self.fg_tiles[index as usize] = TileKind::None;
+                    .map(|(x, y)| {
+                        let index = x as usize + y as usize * self.fg_tiles.width();
+                        self.fg_tiles[index] = TileKind::None;
                         ServerNetMessage::TileSync {
-                            index,
+                            x,
+                            y,
                             tile: TileKind::None,
                         }
                     })
@@ -181,7 +214,28 @@ impl GameUpdateState {
 
     pub fn poststep(&mut self, _timestamp: u64) {
         let humanoid_se = serialize(&[ServerNetMessage::HumanoidSync {
-            humanoids: self.humanoids.clone(),
+            humanoids: self
+                .humanoids
+                .iter()
+                .map(|(k, v)| (*k, NetHumanoid(v.clone())))
+                .collect(),
+        }]);
+
+        let items_se = serialize(&[ServerNetMessage::ItemSync {
+            items: self
+                .items
+                .iter()
+                .map(|(id, item)| {
+                    (
+                        *id,
+                        NetItem {
+                            kind: item.kind,
+                            x: item.bounds.x,
+                            y: item.bounds.y,
+                        },
+                    )
+                })
+                .collect(),
         }]);
 
         // Da big sink
@@ -195,6 +249,7 @@ impl GameUpdateState {
                 continue;
             }
             self.net_manager.send_uu(destination, humanoid_se.clone());
+            self.net_manager.send_uu(destination, items_se.clone());
         }
 
         // Clean disconnects.
@@ -298,7 +353,7 @@ impl GameUpdateState {
                             let viewport_w = 1920;
                             let viewport_h = 1080;
 
-                            let id = self.humanoid_id_counter.next();
+                            let id = self.id_counter.next();
                             connection.id = Some(id);
 
                             self.humanoids.insert(
@@ -388,9 +443,9 @@ impl GameUpdateState {
                             }
                         }
 
-                        ClientNetMessage::HitTile { index } => {
-                            let tile = self.fg_tiles[index as usize];
-                            register_tile_hit(&mut self.tile_damages, index, tile, timestamp);
+                        ClientNetMessage::HitTile { x, y } => {
+                            let tile = self.fg_tiles[(x as usize, y as usize)];
+                            register_tile_hit(&mut self.tile_damages, x, y, tile, timestamp);
                         }
 
                         ClientNetMessage::Ping => self

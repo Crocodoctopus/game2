@@ -2,60 +2,9 @@ use crate::shared::misc::Aabb;
 use crate::shared::physics::*;
 use crate::shared::tile::*;
 use crate::shared::tile_collision::*;
+use crate::shared::GlobalId;
 use bitcode::{Decode, Encode};
 use std::collections::HashMap;
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Default, Encode, Decode, Hash)]
-pub struct HumanoidId(u32);
-
-impl HumanoidId {
-    pub fn new() -> Self {
-        Self(0)
-    }
-
-    pub fn next(&mut self) -> HumanoidId {
-        self.0 += 1;
-        return HumanoidId(self.0 - 1);
-    }
-}
-
-#[derive(Clone, Debug, Encode, Decode, Default)]
-pub struct Humanoids {
-    pub index_map: HashMap<HumanoidId, usize>,
-    pub humanoid_ids: Vec<HumanoidId>,
-    pub humanoids: Vec<Humanoid>,
-}
-
-impl Humanoids {
-    pub fn new() -> Self {
-        Self {
-            ..Default::default()
-        }
-    }
-
-    pub fn insert(&mut self, id: HumanoidId, humanoid: Humanoid) {
-        let index = self.humanoid_ids.len();
-        self.index_map.insert(id, index);
-        self.humanoid_ids.push(id);
-        self.humanoids.push(humanoid);
-    }
-
-    pub fn remove(&mut self, id: HumanoidId) {
-        let Some(index) = self.index_map.remove(&id) else {
-            // Id not in container.
-            return;
-        };
-
-        self.humanoid_ids.swap_remove(index);
-        self.humanoids.swap_remove(index);
-
-        // Correct the index_map.
-        self.humanoid_ids
-            .get(index as usize)
-            .and_then(|id| self.index_map.get_mut(id))
-            .map(|ix| *ix = index);
-    }
-}
 
 #[derive(Clone, Debug, Encode, Decode)]
 pub struct Humanoid {
@@ -70,12 +19,12 @@ pub struct Humanoid {
 }
 
 pub fn update_humanoid_ais(
-    humanoids: &mut HashMap<HumanoidId, Humanoid>,
+    humanoids: &mut HashMap<GlobalId, Humanoid>,
     //col_sys: &CollisionSystem,
     tiles: &TileMap,
 ) {
     // Clone all players.
-    let players: HashMap<HumanoidId, Humanoid> = humanoids
+    let players: HashMap<GlobalId, Humanoid> = humanoids
         .iter()
         .filter(|(_, humanoid)| matches!(humanoid.ai, HumanoidAi::Player))
         .map(|(&id, humanoid)| (id, humanoid.clone()))
@@ -155,7 +104,7 @@ pub fn update_humanoid_ais(
     }
 }
 
-pub fn update_humanoid_inputs(humanoids: &mut HashMap<HumanoidId, Humanoid>) {
+pub fn update_humanoid_inputs(humanoids: &mut HashMap<GlobalId, Humanoid>) {
     for humanoid in humanoids.values_mut() {
         let max_dx = 150f32;
         if humanoid.input.right_queue & 1 != 0 && humanoid.physics.dx < max_dx {
@@ -189,7 +138,7 @@ pub fn update_humanoid_inputs(humanoids: &mut HashMap<HumanoidId, Humanoid>) {
 }
 
 pub fn update_humanoid_physics(
-    humanoids: &mut HashMap<HumanoidId, Humanoid>,
+    humanoids: &mut HashMap<GlobalId, Humanoid>,
     ft: f32,
     tiles: &TileMap,
 ) {

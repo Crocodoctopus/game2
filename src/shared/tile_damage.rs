@@ -7,8 +7,9 @@ pub struct TileDamage {
 }
 
 pub fn register_tile_hit(
-    tile_damages: &mut HashMap<u32, TileDamage>,
-    index: u32,
+    tile_damages: &mut HashMap<(u16, u16), TileDamage>,
+    x: u16,
+    y: u16,
     tile: TileKind,
     timestamp: u64, // in us
 ) {
@@ -18,7 +19,7 @@ pub fn register_tile_hit(
     }
 
     // Insert a TileDamage associated with tile_index.
-    let tile_damage = tile_damages.entry(index).or_insert(TileDamage {
+    let tile_damage = tile_damages.entry((x, y)).or_insert(TileDamage {
         timestamp: 0,
         hp: 200,
     });
@@ -33,14 +34,14 @@ pub fn remove_tile_damage(tile_damages: &mut HashMap<u32, TileDamage>, index: u3
 }
 
 pub fn update_tile_damages(
-    tile_damages: &mut HashMap<u32, TileDamage>,
+    tile_damages: &mut HashMap<(u16, u16), TileDamage>,
     timestamp: u64,
-) -> Vec<u32> {
+) -> Vec<(u16, u16)> {
     // Collect all dead tiles.
     let tiles_destroyed = tile_damages
         .iter()
         .filter(|(_, tile_damage)| tile_damage.hp == 0)
-        .map(|(index, _)| *index)
+        .map(|(xy, _)| *xy)
         .collect();
 
     let timestamp = (timestamp / 1000 / 100) as u8;

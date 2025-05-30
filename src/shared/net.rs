@@ -1,12 +1,22 @@
-use crate::shared::humanoid::{Humanoid, HumanoidId};
+use crate::shared::humanoid::*;
 use crate::shared::item::*;
 use crate::shared::tile::*;
+use crate::shared::GlobalId;
 use bitcode::{decode, encode, Decode, DecodeOwned, Encode};
-use std::collections::HashMap;
 
 pub trait NetMessage: Encode + DecodeOwned {}
 impl NetMessage for ClientNetMessage {}
 impl NetMessage for ServerNetMessage {}
+
+#[derive(Clone, Encode, Decode, Debug)]
+pub struct NetItem {
+    pub kind: ItemKind,
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Clone, Encode, Decode, Debug)]
+pub struct NetHumanoid(pub Humanoid);
 
 #[derive(Clone, Encode, Decode, Debug)]
 pub enum ClientNetMessage {
@@ -20,7 +30,7 @@ pub enum ClientNetMessage {
 
     SyncPlayer { player: Humanoid },
 
-    HitTile { index: u32 },
+    HitTile { x: u16, y: u16 },
 
     RequestChunk { x: u16, y: u16 },
 }
@@ -39,7 +49,7 @@ pub enum ServerNetMessage {
     JoinAccept {
         width: u16,
         height: u16,
-        id: HumanoidId,
+        id: GlobalId,
         spawn_x: u16,
         spawn_y: u16,
     },
@@ -52,16 +62,17 @@ pub enum ServerNetMessage {
     },
 
     TileSync {
-        index: u32,
+        x: u16,
+        y: u16,
         tile: TileKind,
     },
 
     ItemSync {
-        items: Box<[(ItemKind, f32, f32)]>,
+        items: Box<[(GlobalId, NetItem)]>,
     },
 
     HumanoidSync {
-        humanoids: HashMap<HumanoidId, Humanoid>,
+        humanoids: Box<[(GlobalId, NetHumanoid)]>,
     },
 
     Start,

@@ -1,9 +1,13 @@
 use crate::client::game_render_desc::*;
 use crate::client::log;
 use crate::net::{ClientNetManager, NetEventKind};
+use crate::shared::GlobalId;
 use crate::shared::humanoid::*;
+use crate::shared::item::*;
 use crate::shared::light::*;
+use crate::shared::misc::Aabb;
 use crate::shared::net::*;
+use crate::shared::physics::GenericPhysics;
 use crate::shared::tile::*;
 use crate::window::InputEvent;
 use std::collections::HashMap;
@@ -45,8 +49,11 @@ pub struct GameUpdateState {
     bg_tiles: TileMap,
 
     // Humanoids.
-    player_id: HumanoidId,
-    humanoids: HashMap<HumanoidId, Humanoid>,
+    player_id: GlobalId,
+    humanoids: HashMap<GlobalId, Humanoid>,
+
+    // Items.
+    items: HashMap<GlobalId, Item>,
 }
 
 impl GameUpdateState {
@@ -65,7 +72,7 @@ impl GameUpdateState {
         let mut fg_tiles: Box<[TileKind]> = Box::new([]);
         let mut bg_tiles: Box<[TileKind]> = Box::new([]);
 
-        let mut player_id = HumanoidId::new();
+        let mut player_id = None;
         let humanoids = HashMap::new();
 
         // Start join sequence.
@@ -93,7 +100,7 @@ impl GameUpdateState {
                                         spawn_y: _inner_spawn_y,
                                     } => {
                                         // Player.
-                                        player_id = id;
+                                        player_id = Some(id);
 
                                         // Init world.
                                         //spawn_x = inner_spawn_x as usize;
@@ -183,8 +190,10 @@ impl GameUpdateState {
             bg_tiles: TileMap::from_data(world_w, world_h, bg_tiles),
 
             // Humanoids.
-            player_id,
+            player_id: player_id.unwrap(),
             humanoids,
+
+            items: HashMap::new(),
         }
     }
 
@@ -228,6 +237,9 @@ impl GameUpdateState {
         // Humanoid physics and collision pass.
         update_humanoid_physics(&mut self.humanoids, frametime, &self.fg_tiles);
 
+        // Item ph
+        update_item_physics(&mut self.items, frametime, &self.fg_tiles);
+
         // Clamp position (TODO: right-bottom world clamp).
         if let Some(player) = self.humanoids.get(&self.player_id) {
             self.viewport_x = ((player.bounds.x + player.bounds.width / 2.) as usize)
@@ -243,7 +255,8 @@ impl GameUpdateState {
         // Temp.
         if self.use_queue & 0b11 == 0b01 {
             let bytes = serialize(&[ClientNetMessage::HitTile {
-                index: (self.mouse_x / 16 + self.mouse_y / 16 * self.fg_tiles.width()) as u32,
+                x: (self.mouse_x / TILE_SIZE) as u16,
+                y: (self.mouse_y / TILE_SIZE) as u16,
             }]);
             self.net_manager.send_ru(bytes);
         }
@@ -269,9 +282,6 @@ impl GameUpdateState {
         // Clone the tiles in the visible range (plus 1).
         let (tiles_x, tiles_y, tiles_w, tiles_h, fg_tiles, bg_tiles) = clone_visible_tile_map(self);
 
-        // Clone the sprites in the visible range..
-        let sprites = clone_visible_sprites(self);
-
         // Poll the network to send all messages.
         self.net_manager.poll();
 
@@ -282,7 +292,8 @@ impl GameUpdateState {
             viewport_w: self.viewport_w as f32,
             viewport_h: self.viewport_h as f32,
 
-            sprites,
+            items: clone_visible_items(self),
+            sprites: clone_visible_sprites(self),
 
             light_x,
             light_y,
@@ -305,7 +316,7 @@ impl GameUpdateState {
         for e in self.net_manager.recv() {
             match e.kind {
                 NetEventKind::Data(bytes) => {
-                    for msg in deserialize(bytes).iter().cloned() {
+                    for msg in deserialize(bytes).into_iter() {
                         match msg {
                             ServerNetMessage::ChunkSync {
                                 x,
@@ -332,7 +343,8 @@ impl GameUpdateState {
                                 let player = self.humanoids.get(&self.player_id).cloned();
 
                                 // Swap.
-                                self.humanoids = humanoids;
+                                self.humanoids =
+                                    humanoids.into_iter().map(|(k, v)| (k, v.0)).collect();
 
                                 // Put player back in.
                                 if let Some(player) = player {
@@ -342,8 +354,39 @@ impl GameUpdateState {
                                 }
                             }
 
-                            ServerNetMessage::TileSync { index, tile } => {
-                                self.fg_tiles[index as usize] = tile;
+                            ServerNetMessage::ItemSync { items } => {
+                                self.items = items
+                                    .into_iter()
+                                    .map(|(k, v)| {
+                                        (
+                                            k,
+                                            Item {
+                                                bounds: Aabb {
+                                                    x: v.x,
+                                                    y: v.y,
+                                                    width: 16.,
+                                                    height: 16.,
+                                                },
+                                                last_x: v.x,
+                                                last_y: v.y,
+                                                physics: GenericPhysics {
+                                                    dx: 0.,
+                                                    dy: 0.,
+                                                    ddx: 0.,
+                                                    ddy: 0.,
+                                                },
+                                                flags: 0,
+                                                kind: v.kind,
+                                                count: 1,
+                                            },
+                                        )
+                                    })
+                                    .collect();
+                            }
+
+                            ServerNetMessage::TileSync { x, y, tile } => {
+                                let stride = self.fg_tiles.width();
+                                self.fg_tiles[x as usize + y as usize * stride] = tile;
                             }
 
                             ServerNetMessage::Ping => self
@@ -579,15 +622,25 @@ fn clone_visible_tile_map(
     (x1, y1, x2 - x1, y2 - y1, fg_tiles, bg_tiles)
 }
 
+fn clone_visible_items(game: &mut GameUpdateState) -> Box<[ItemRenderDesc]> {
+    game.items
+        .values()
+        .map(|item| ItemRenderDesc {
+            x: item.bounds.x,
+            y: item.bounds.y,
+            kind: item.kind,
+        })
+        .collect()
+}
+
 fn clone_visible_sprites(game: &mut GameUpdateState) -> Box<[SpriteRenderDesc]> {
     game.humanoids
         .values()
-        .map(|humanoid| &humanoid.bounds)
-        .map(|bounds| SpriteRenderDesc {
-            x: bounds.x.floor(),
-            y: bounds.y.floor(),
-            w: bounds.width,
-            h: bounds.height,
+        .map(|humanoid| SpriteRenderDesc {
+            x: humanoid.bounds.x.floor(),
+            y: humanoid.bounds.y.floor(),
+            w: humanoid.bounds.width,
+            h: humanoid.bounds.height,
             u: 0.,
             v: 0.,
         })

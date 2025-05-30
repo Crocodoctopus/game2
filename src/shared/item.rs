@@ -1,12 +1,10 @@
+use super::GlobalId;
 use super::misc::Aabb;
 use crate::shared::physics::*;
 use crate::shared::tile::*;
 use crate::shared::tile_collision::*;
 use bitcode::{Decode, Encode};
 use std::collections::HashMap;
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Default, Encode, Decode, Hash)]
-pub struct ItemId(u32);
 
 #[derive(Copy, Clone, Debug, Encode, Decode)]
 pub enum ItemKind {
@@ -38,16 +36,16 @@ impl ItemKind {
 }
 
 pub struct Item {
-    bounds: Aabb,
-    last_x: f32,
-    last_y: f32,
-    physics: GenericPhysics,
-    flags: TileCollisionFlags,
-    kind: ItemKind,
-    count: u8,
+    pub bounds: Aabb,
+    pub last_x: f32,
+    pub last_y: f32,
+    pub physics: GenericPhysics,
+    pub flags: TileCollisionFlags,
+    pub kind: ItemKind,
+    pub count: u8,
 }
 
-pub fn update_item_physics(items: &mut HashMap<u32, Item>, ft: f32, tiles: &TileMap) {
+pub fn update_item_physics(items: &mut HashMap<GlobalId, Item>, ft: f32, tiles: &TileMap) {
     for item in items.values_mut() {
         // X physics.
         item.last_x = item.bounds.x;

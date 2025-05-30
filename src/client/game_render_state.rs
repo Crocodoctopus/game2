@@ -1,5 +1,5 @@
 use crate::client::game_render_desc::{self, *};
-use crate::shared::tile::{TileKind, TILE_SIZE};
+use crate::shared::tile::{TILE_SIZE, TileKind};
 use crate::window::*;
 use glutin::context::{
     ContextApi, ContextAttributesBuilder, NotCurrentContext, PossiblyCurrentContext, Version,
@@ -9,6 +9,7 @@ use glutin::prelude::{GlDisplay, NotCurrentGlContext};
 use glutin::surface::{GlSurface, Surface, WindowSurface};
 use glutin_winit::GlWindow;
 use nalgebra_glm::*;
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::Path;
 use winit::raw_window_handle::HasWindowHandle;
@@ -23,7 +24,9 @@ pub struct GameRenderState {
     quad_ibo: GlHandle, // u16
 
     //
-    //sprite_texture: GlHandle,
+    textures: HashMap<&'static str, GlHandle>,
+
+    //
     sprite_program: GlHandle,
     sprite_xyz: GlHandle,
     sprite_uv: GlHandle,
@@ -34,8 +37,7 @@ pub struct GameRenderState {
     light_program: GlHandle,
 
     // Tile rendering.
-    tile_texture: GlHandle, // RGBA
-    mask_texture: GlHandle, // R
+    tile_mask_texture: GlHandle, // R
     tile_program: GlHandle,
     tile_xyz: GlHandle,     // xyz f32
     tile_uv: GlHandle,      // uv f32
@@ -147,7 +149,12 @@ impl GameRenderState {
             gl::Enable(gl::TEXTURE_2D);
             gl::DebugMessageCallback(Some(gl_debug_callback), std::ptr::null());
 
+            //
+            let mut textures = HashMap::new();
+
             // Load tile texture into gpu.
+            let path = "tile_sheet.png";
+            let texture = image::load_from_memory(std::fs::rea)
             let temp_texture =
                 image::load_from_memory(include_bytes!("../../resources/tile_sheet.png")).unwrap();
             let mut tile_texture = GlHandle::null();
@@ -171,9 +178,9 @@ impl GameRenderState {
             // Load mask texture into gpu.
             let temp_texture =
                 image::load_from_memory(include_bytes!("../../resources/mask_sheet.png")).unwrap();
-            let mut mask_texture = GlHandle::null();
-            gl::GenTextures(1, &mut mask_texture.0);
-            gl::BindTexture(gl::TEXTURE_2D, mask_texture.0);
+            let mut tile_mask_texture = GlHandle::null();
+            gl::GenTextures(1, &mut tile_mask_texture.0);
+            gl::BindTexture(gl::TEXTURE_2D, tile_mask_texture.0);
             gl::TexImage2D(
                 gl::TEXTURE_2D,
                 0,
@@ -281,7 +288,8 @@ impl GameRenderState {
                 global_vao,
                 quad_ibo,
 
-                //sprite_texture,
+                textures: HashMap
+
                 sprite_program,
                 sprite_xyz,
                 sprite_uv,
@@ -289,8 +297,7 @@ impl GameRenderState {
                 light_texture,
                 light_program,
 
-                tile_texture,
-                mask_texture,
+                tile_mask_texture,
                 tile_program,
                 tile_xyz,
                 tile_uv,
@@ -358,6 +365,12 @@ impl GameRenderState {
         }
 
         // Generate sprite vertex data.
+        let mut sprites = 0;
+        let mut sprite_data = HashMap::new();
+        for &SpriteRenderDesc { x, y, u, v, w, h } in &game_render_desc.sprites {
+            sprite_data.entry("")
+        }
+
         let sprites = game_render_desc.sprites.len();
         let mut sprite_xyz_data = Vec::with_capacity(sprites);
         let mut sprite_uv_data = Vec::with_capacity(sprites);
