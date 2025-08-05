@@ -1,8 +1,8 @@
+use crate::shared::GlobalId;
 use crate::shared::humanoid::*;
 use crate::shared::item::*;
 use crate::shared::tile::*;
-use crate::shared::GlobalId;
-use bitcode::{decode, encode, Decode, DecodeOwned, Encode};
+use bitcode::{Decode, DecodeOwned, Encode, decode, encode};
 
 pub trait NetMessage: Encode + DecodeOwned {}
 impl NetMessage for ClientNetMessage {}

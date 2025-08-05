@@ -10,7 +10,7 @@ pub struct ItemRenderDesc {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct SpriteRenderDesc {
+pub struct HumanoidRenderDesc {
     pub x: f32,
     pub y: f32,
     pub u: f32,
@@ -33,8 +33,8 @@ pub struct GameRenderDesc {
     // Item data.
     pub items: Box<[ItemRenderDesc]>,
 
-    // Sprite data.
-    pub sprites: Box<[SpriteRenderDesc]>,
+    // Humanoid data.
+    pub humanoids: Box<[HumanoidRenderDesc]>,
 
     // Light data.
     pub light_x: usize,

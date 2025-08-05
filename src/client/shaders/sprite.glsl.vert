@@ -2,7 +2,7 @@
 
 layout (location = 0) in vec3 vert_xyz;
 layout (location = 1) in vec2 vert_uv;
-layout (location = 2) in vec3 vert_rgb;
+//layout (location = 2) in vec3 vert_rgb;
 
 out vec2 frag_uv;
 out vec3 frag_rgb;
@@ -14,5 +14,5 @@ void main() {
     vec3 pos = model * view * vec3(vert_xyz.xy, 1);
     gl_Position = vec4(pos.xy, vert_xyz.z, 1.0);
     frag_uv = vert_uv;
-    frag_rgb = vert_rgb;
+    frag_rgb = vec3(1.0, 1.0, 1.0);
 }

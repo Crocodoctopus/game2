@@ -24,6 +24,7 @@ fn main() {
             .expect("Could not get CWD.")
             .parent()
             .unwrap()
+            .join("../..")
             .to_owned()
     });
 

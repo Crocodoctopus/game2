@@ -7,7 +7,6 @@ use crate::time::*;
 use crate::window::*;
 use crossbeam_channel::Receiver;
 use std::path::Path;
-use std::rc::Rc;
 
 pub fn run_client(
     input_recv: Receiver<InputEvent>,
@@ -121,8 +120,7 @@ pub fn run_client(
             if update_n > 60 * 30 {
                 log!(
                     "Update total: {:.2}ms.\n  Prestep: {:.2}ms.\n  Step: {:.2}ms.\n  Poststep: {:.2}ms.",
-                    ((prestep_acc + step_acc + poststep_acc)
-                        / update_n) as f32 * 0.001,
+                    ((prestep_acc + step_acc + poststep_acc) / update_n) as f32 * 0.001,
                     (prestep_acc / update_n) as f32 * 0.001,
                     (step_acc / update_n) as f32 * 0.001,
                     (poststep_acc / update_n) as f32 * 0.001,

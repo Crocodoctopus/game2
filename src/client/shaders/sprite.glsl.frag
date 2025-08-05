@@ -12,6 +12,6 @@ void main() {
     if (rgba.rgb == vec3(1.0, 0.0, 1.0)) {
         discard;
     }*/
-    rgba = vec4(1.0, 1.0, 1.0, 1.0);
+    rgba = vec4(1.0, 1.0, 0.0, 1.0);
     rgba.rgb *= frag_rgb;
 }

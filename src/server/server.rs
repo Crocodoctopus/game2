@@ -1,5 +1,5 @@
 use crate::net::ServerNetManager;
-use crate::server::GameUpdateState;
+use crate::server::game_update_state::*;
 use crate::time::timestamp_as_usecs;
 use std::path::Path;
 
@@ -51,14 +51,12 @@ pub fn run_server(root: &'static Path, net_manager: ServerNetManager) -> ! {
         // Time printing.
         if update_n > 60 * 30 {
             println!(
-                    "\x1b[91m[Server] Update total: {:.2}ms.\n  Prestep: {:.2}ms.\n  Step: {:.2}ms.\n  Poststep: {:.2}ms.\x1b[0m",
-                    ((prestep_acc + step_acc + poststep_acc)
-                        / update_n) as f32
-                        * 0.001,
-                    (prestep_acc / update_n) as f32 * 0.001,
-                    (step_acc / update_n) as f32 * 0.001,
-                    (poststep_acc / update_n) as f32 * 0.001,
-                );
+                "\x1b[91m[Server] Update total: {:.2}ms.\n  Prestep: {:.2}ms.\n  Step: {:.2}ms.\n  Poststep: {:.2}ms.\x1b[0m",
+                ((prestep_acc + step_acc + poststep_acc) / update_n) as f32 * 0.001,
+                (prestep_acc / update_n) as f32 * 0.001,
+                (step_acc / update_n) as f32 * 0.001,
+                (poststep_acc / update_n) as f32 * 0.001,
+            );
             prestep_acc = 0;
             step_acc = 0;
             poststep_acc = 0;

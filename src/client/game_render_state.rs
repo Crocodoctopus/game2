@@ -1,5 +1,8 @@
-use crate::client::game_render_desc::{self, *};
-use crate::shared::tile::{TILE_SIZE, TileKind};
+pub const MAX_LIGHTMAP_SIZE: usize = 512;
+
+use crate::client::log;
+use crate::shared::item::ItemKind;
+use crate::shared::tile::{TILE_SIZE, TILE_TEXTURE_PROPERTIES, TileKind, TileTextureProperty};
 use crate::window::*;
 use glutin::context::{
     ContextApi, ContextAttributesBuilder, NotCurrentContext, PossiblyCurrentContext, Version,
@@ -11,26 +14,41 @@ use glutin_winit::GlWindow;
 use nalgebra_glm::*;
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::mem::offset_of;
 use std::path::Path;
 use winit::raw_window_handle::HasWindowHandle;
+
+use super::game_render_desc::{GameRenderDesc, HumanoidRenderDesc, ItemRenderDesc};
+
+#[derive(Copy, Clone, Debug, Default)]
+struct TileVertex {
+    xyz: GlVec3,
+    uv: GlVec2,
+    mask_uv: GlVec2,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct SpriteVertex {
+    xy: GlVec3,
+    uv: GlVec2,
+}
 
 #[allow(dead_code)]
 pub struct GameRenderState {
     context: PossiblyCurrentContext,
     surface: Surface<WindowSurface>,
 
-    // General purpose
+    // General purpose.
     global_vao: GlHandle,
     quad_ibo: GlHandle, // u16
 
-    //
+    // Generic texture map.
     textures: HashMap<&'static str, GlHandle>,
 
     //
+    //sprite_texture: GlHandle,
+    sprite_vertices: GlHandle,
     sprite_program: GlHandle,
-    sprite_xyz: GlHandle,
-    sprite_uv: GlHandle,
-    sprite_rgb: GlHandle,
 
     // Light rendering.
     light_texture: GlHandle,
@@ -39,11 +57,11 @@ pub struct GameRenderState {
     // Tile rendering.
     tile_mask_texture: GlHandle, // R
     tile_program: GlHandle,
-    tile_xyz: GlHandle,     // xyz f32
-    tile_uv: GlHandle,      // uv f32
-    tile_mask_uv: GlHandle, // uv f32
+    fg_tile_vertices: GlHandle,
+    bg_tile_vertices: GlHandle,
 }
 
+#[derive(Debug)]
 struct GlHandle(pub gl::types::GLuint);
 
 impl GlHandle {
@@ -57,18 +75,18 @@ impl GlHandle {
 }
 
 #[allow(unused)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
 struct GlVec2(f32, f32);
 
 #[allow(unused)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
 struct GlVec3(f32, f32, f32);
 
 impl GameRenderState {
     pub fn new(
-        _root: &'static Path,
+        root: &'static Path,
         context: NotCurrentContext,
         surface: Surface<WindowSurface>,
     ) -> Self {
@@ -134,13 +152,16 @@ impl GameRenderState {
                 _source: GLenum,
                 _ptype: GLenum,
                 _id: GLuint,
-                _severity: GLenum,
+                severity: GLenum,
                 _length: GLsizei,
                 message: *const GLchar,
                 _user_param: *mut c_void,
             ) {
-                let msg = unsafe { std::ffi::CStr::from_ptr(message) };
-                println!("GL CALLBACK: {msg:?}");
+                // Filter out info notifications.
+                if severity != gl::DEBUG_SEVERITY_NOTIFICATION {
+                    let msg = unsafe { std::ffi::CStr::from_ptr(message) };
+                    log!("GL CALLBACK: {msg:?}");
+                }
             }
 
             gl::Enable(gl::DEBUG_OUTPUT);
@@ -153,65 +174,74 @@ impl GameRenderState {
             let mut textures = HashMap::new();
 
             // Load tile texture into gpu.
-            let path = "tile_sheet.png";
-            let texture = image::load_from_memory(std::fs::rea)
-            let temp_texture =
-                image::load_from_memory(include_bytes!("../../resources/tile_sheet.png")).unwrap();
-            let mut tile_texture = GlHandle::null();
-            gl::GenTextures(1, &mut tile_texture.0);
-            assert!(!tile_texture.is_null());
-            gl::BindTexture(gl::TEXTURE_2D, tile_texture.0);
-            gl::TexImage2D(
-                gl::TEXTURE_2D,
-                0,
-                gl::RGB as i32,
-                temp_texture.width() as i32,
-                temp_texture.height() as i32,
-                0,
-                gl::RGB,
-                gl::UNSIGNED_BYTE,
-                temp_texture.into_rgb8().as_ptr() as *const c_void,
-            );
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+            {
+                let path = "tile_sheet.png";
+                let data = std::fs::read(root.join("resources").join(path)).unwrap();
+                let texture_data = image::load_from_memory(&data[..]).unwrap();
+                let mut texture_handle = GlHandle::null();
+                gl::GenTextures(1, &mut texture_handle.0);
+                assert!(!texture_handle.is_null());
+                gl::BindTexture(gl::TEXTURE_2D, texture_handle.0);
+                gl::TexImage2D(
+                    gl::TEXTURE_2D,
+                    0,
+                    gl::RGB as i32,
+                    texture_data.width() as i32,
+                    texture_data.height() as i32,
+                    0,
+                    gl::RGB,
+                    gl::UNSIGNED_BYTE,
+                    texture_data.into_rgb8().as_ptr() as *const c_void,
+                );
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+                textures.insert(path, texture_handle);
+            }
 
             // Load mask texture into gpu.
-            let temp_texture =
-                image::load_from_memory(include_bytes!("../../resources/mask_sheet.png")).unwrap();
-            let mut tile_mask_texture = GlHandle::null();
-            gl::GenTextures(1, &mut tile_mask_texture.0);
-            gl::BindTexture(gl::TEXTURE_2D, tile_mask_texture.0);
-            gl::TexImage2D(
-                gl::TEXTURE_2D,
-                0,
-                gl::R8I as i32,
-                temp_texture.width() as i32,
-                temp_texture.height() as i32,
-                0,
-                gl::RED_INTEGER,
-                gl::UNSIGNED_BYTE,
-                temp_texture.into_luma8().as_ptr() as *const c_void,
-            );
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+            let tile_mask_texture = {
+                let path = "mask_sheet.png";
+                let data = std::fs::read(root.join("resources").join(path)).unwrap();
+                let texture_data = image::load_from_memory(&data[..]).unwrap();
+                let mut texture_handle = GlHandle::null();
+                gl::GenTextures(1, &mut texture_handle.0);
+                gl::BindTexture(gl::TEXTURE_2D, texture_handle.0);
+                gl::TexImage2D(
+                    gl::TEXTURE_2D,
+                    0,
+                    gl::R8I as i32,
+                    texture_data.width() as i32,
+                    texture_data.height() as i32,
+                    0,
+                    gl::RED_INTEGER,
+                    gl::UNSIGNED_BYTE,
+                    texture_data.into_luma8().as_ptr() as *const c_void,
+                );
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+                texture_handle
+            };
 
             // Create light texture.
-            let mut light_texture = GlHandle::null();
-            gl::GenTextures(1, &mut light_texture.0);
-            gl::BindTexture(gl::TEXTURE_2D, light_texture.0);
-            gl::TexImage2D(
-                gl::TEXTURE_2D,
-                0,
-                gl::RGBA8UI as i32,
-                512,
-                512,
-                0,
-                gl::RGBA_INTEGER,
-                gl::UNSIGNED_BYTE,
-                std::ptr::null(),
-            );
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+            let light_texture = {
+                let mut texture_handle = GlHandle::null();
+                gl::GenTextures(1, &mut texture_handle.0);
+                gl::BindTexture(gl::TEXTURE_2D, texture_handle.0);
+                gl::TexImage2D(
+                    gl::TEXTURE_2D,
+                    0,
+                    gl::RGBA8UI as i32,
+                    512,
+                    512,
+                    0,
+                    gl::RGBA_INTEGER,
+                    gl::UNSIGNED_BYTE,
+                    std::ptr::null(),
+                );
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+                texture_handle
+            };
 
             // Bind the VAO and never touch it again.
             let mut global_vao = GlHandle::null();
@@ -231,13 +261,10 @@ impl GameRenderState {
                 gl::STATIC_DRAW,
             );
 
-            let tile_xyz = gen_buffer().unwrap();
-            let tile_uv = gen_buffer().unwrap();
-            let tile_mask_uv = gen_buffer().unwrap();
+            let fg_tile_vertices = gen_buffer().unwrap();
+            let bg_tile_vertices = gen_buffer().unwrap();
 
-            let sprite_xyz = gen_buffer().unwrap();
-            let sprite_uv = gen_buffer().unwrap();
-            let sprite_rgb = gen_buffer().unwrap();
+            let sprite_vertices = gen_buffer().unwrap();
 
             let tile_program = create_program(
                 create_shader(
@@ -288,20 +315,19 @@ impl GameRenderState {
                 global_vao,
                 quad_ibo,
 
-                textures: HashMap
+                textures,
 
+                //sprite_texture,
                 sprite_program,
-                sprite_xyz,
-                sprite_uv,
-                sprite_rgb,
+                sprite_vertices,
+
                 light_texture,
                 light_program,
 
                 tile_mask_texture,
                 tile_program,
-                tile_xyz,
-                tile_uv,
-                tile_mask_uv,
+                fg_tile_vertices,
+                bg_tile_vertices,
             }
         }
     }
@@ -336,7 +362,7 @@ impl GameRenderState {
             ))
         };
 
-        // Upload light data to texture.
+        // Upload light data to gpu.
         {
             let w = game_render_desc.light_w;
             let h = game_render_desc.light_h;
@@ -365,296 +391,219 @@ impl GameRenderState {
         }
 
         // Generate sprite vertex data.
-        let mut sprites = 0;
-        let mut sprite_data = HashMap::new();
-        for &SpriteRenderDesc { x, y, u, v, w, h } in &game_render_desc.sprites {
-            sprite_data.entry("")
+
+        // Generate sprites for Humanoids.
+        let mut sprite_vertices = Vec::with_capacity(game_render_desc.humanoids.len());
+        for &HumanoidRenderDesc { x, y, u, v, w, h } in &game_render_desc.humanoids {
+            sprite_vertices.extend_from_slice(&[
+                SpriteVertex {
+                    xy: GlVec3(x, y, 0.),
+                    uv: GlVec2(u, v),
+                },
+                SpriteVertex {
+                    xy: GlVec3(x + w, y, 0.),
+                    uv: GlVec2(u + w, v),
+                },
+                SpriteVertex {
+                    xy: GlVec3(x + w, y + h, 0.),
+                    uv: GlVec2(u + w, v + h),
+                },
+                SpriteVertex {
+                    xy: GlVec3(x, y + h, 0.),
+                    uv: GlVec2(u, v + h),
+                },
+            ]);
         }
+        let sprite_count = sprite_vertices.len() / 4;
 
-        let sprites = game_render_desc.sprites.len();
-        let mut sprite_xyz_data = Vec::with_capacity(sprites);
-        let mut sprite_uv_data = Vec::with_capacity(sprites);
-        let mut sprite_rgb_data = Vec::with_capacity(sprites);
-        if sprites > 0 {
-            for &SpriteRenderDesc { x, y, u, v, w, h } in &game_render_desc.sprites {
-                sprite_xyz_data.extend_from_slice(&[
-                    GlVec3(x, y, 0.),
-                    GlVec3(x + w, y, 0.),
-                    GlVec3(x + w, y + h, 0.),
-                    GlVec3(x, y + h, 0.),
-                ]);
-
-                sprite_uv_data.extend_from_slice(&[
-                    GlVec2(u, y),
-                    GlVec2(u + w, v),
-                    GlVec2(u + w, v + h),
-                    GlVec2(u, v + h),
-                ]);
-
-                sprite_rgb_data.extend_from_slice(&[
-                    GlVec3(1., 1., 1.),
-                    GlVec3(1., 1., 1.),
-                    GlVec3(1., 1., 1.),
-                    GlVec3(1., 1., 1.),
-                ]);
+        // Upload sprite data to GPU.
+        if sprite_count > 0 {
+            unsafe {
+                gl::BindBuffer(gl::ARRAY_BUFFER, self.sprite_vertices.0);
+                gl::BufferData(
+                    gl::ARRAY_BUFFER,
+                    (sprite_vertices.len() * size_of::<SpriteVertex>()) as isize,
+                    sprite_vertices.as_ptr() as *const c_void,
+                    gl::STATIC_DRAW,
+                );
             }
         }
 
-        // Calculate tile vertex data.
-        let max_tiles = (game_render_desc.tiles_w - 2) * (game_render_desc.tiles_h - 2);
-        let mut fg_tile_xyz_data = Vec::with_capacity(4 * max_tiles);
-        let mut fg_tile_uv_data = Vec::with_capacity(4 * max_tiles);
-        let mut fg_tile_mask_uv_data = Vec::with_capacity(4 * max_tiles);
-        let mut bg_tile_xyz_data = Vec::with_capacity(4 * max_tiles);
-        let mut bg_tile_uv_data = Vec::with_capacity(4 * max_tiles);
-        let mut bg_tile_mask_uv_data = Vec::with_capacity(4 * max_tiles);
-        if max_tiles > 0 {
-            // Calculate tile data and upload to GPU.
-            let tile_texture_properties_lookup = &crate::shared::tile::TILE_TEXTURE_PROPERTIES;
-            let stride = game_render_desc.tiles_w;
-            for y in 1..game_render_desc.tiles_h - 1 {
-                for x in 1..game_render_desc.tiles_w - 1 {
-                    let index = x + y * game_render_desc.tiles_w;
+        // Generate sprites for Items.
+        /*for &ItemRenderDesc { x, y, kind } in &game_render_desc.items {
+            let (w, h, u, v) = match kind {
+                ItemKind::Tile(_tile) => (TILE_SIZE as f32, TILE_SIZE as f32, 0., 0.),
+                #[allow(unreachable_patterns)]
+                _ => unimplemented!(),
+            };
 
-                    // Skip FG if tile is None.
-                    if !matches!(game_render_desc.fg_tiles[index].0, TileKind::None) {
-                        // Get tile properties.
-                        let tile_texture_properties = tile_texture_properties_lookup
-                            [game_render_desc.fg_tiles[index].0 as usize];
+            sprite_data
+                .entry("default")
+                .or_default()
+                .extend_from_slice(&[
+                    SpriteVertex {
+                        xy: GlVec3(x, y, 0.),
+                        uv: GlVec2(u, v),
+                    },
+                    SpriteVertex {
+                        xy: GlVec3(x + w, y, 0.),
+                        uv: GlVec2(u + w, v),
+                    },
+                    SpriteVertex {
+                        xy: GlVec3(x + w, y + h, 0.),
+                        uv: GlVec2(u + w, v + h),
+                    },
+                    SpriteVertex {
+                        xy: GlVec3(x, y + h, 0.),
+                        uv: GlVec2(u, v + h),
+                    },
+                ]);
+        }*/
 
-                        // Get texture UV.
-                        let u = tile_texture_properties.u;
-                        let v = tile_texture_properties.v;
+        // Generate tile vertex data from game render descriptor.
+        let (fg_tile_vertices, bg_tile_vertices) = generate_tile_data(game_render_desc);
+        let bg_tile_count = bg_tile_vertices.len() / 4;
+        let fg_tile_count = fg_tile_vertices.len() / 4;
 
-                        // Get depth.
-                        let depth = tile_texture_properties.depth;
-
-                        // Calculate position.
-                        let x = 16. * (x + game_render_desc.tiles_x) as f32;
-                        let y = 16. * (y + game_render_desc.tiles_y) as f32;
-                        let z = depth as f32;
-
-                        // Calculate mask UV.
-                        #[rustfmt::skip]
-                        let mask_u = [ index - stride, index - stride + 1, index + 1, index + stride + 1 ]
-                            .into_iter()
-                            .rev()
-                            .map(|index| game_render_desc.fg_tiles[index].0)
-                            .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
-                            .map(|dep| (depth > dep) as u8)
-                            .reduce(|acc, bit| (acc << 1) | bit)
-                            .map(|out| (out << 2) as f32)
-                            .unwrap();
-                        #[rustfmt::skip]
-                        let mask_v  = [index + stride, index + stride - 1, index - 1, index - stride - 1 ]
-                            .into_iter()
-                            .rev()
-                            .map(|index| game_render_desc.fg_tiles[index].0)
-                            .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
-                            .map(|dep| (depth > dep) as u8)
-                            .reduce(|acc, bit| (acc << 1) | bit)
-                            .map(|out| (out << 2) as f32)
-                            .unwrap();
-
-                        fg_tile_xyz_data.extend_from_slice(&[
-                            GlVec3(x - 8., y - 8., z),
-                            GlVec3(x + 16. + 8., y - 8., z),
-                            GlVec3(x + 16. + 8., y + 16. + 8., z),
-                            GlVec3(x - 8., y + 16. + 8., z),
-                        ]);
-
-                        fg_tile_uv_data.extend_from_slice(&[
-                            GlVec2(u, v),
-                            GlVec2(u + 16., v),
-                            GlVec2(u + 16., v + 16.),
-                            GlVec2(u, v + 16.),
-                        ]);
-
-                        fg_tile_mask_uv_data.extend_from_slice(&[
-                            GlVec2(mask_u, mask_v),
-                            GlVec2(mask_u + 4., mask_v),
-                            GlVec2(mask_u + 4., mask_v + 4.),
-                            GlVec2(mask_u, mask_v + 4.),
-                        ]);
-
-                        // Skip check bg tile.
-                        continue;
-                    }
-
-                    // Skip BG if tile is None.
-                    if !matches!(game_render_desc.bg_tiles[index].0, TileKind::None) {
-                        let tile_texture_properties = tile_texture_properties_lookup
-                            [game_render_desc.bg_tiles[index].0 as usize];
-
-                        // Get texture UV.
-                        let u = tile_texture_properties.u;
-                        let v = tile_texture_properties.v;
-
-                        // Get depth.
-                        let depth = tile_texture_properties.depth;
-
-                        // Calculate position.
-                        let x = 16. * (x + game_render_desc.tiles_x) as f32;
-                        let y = 16. * (y + game_render_desc.tiles_y) as f32;
-                        let z = depth as f32;
-
-                        // Calculate mask UV.
-                        #[rustfmt::skip]
-                        let mask_u = [ index - stride, index - stride + 1, index + 1, index + stride + 1 ]
-                            .into_iter()
-                            .rev()
-                            .map(|index| game_render_desc.bg_tiles[index].0)
-                            .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
-                            .map(|dep| (depth > dep) as u8)
-                            .reduce(|acc, bit| (acc << 1) | bit)
-                            .map(|out| (out << 2) as f32)
-                            .unwrap();
-                        #[rustfmt::skip]
-                        let mask_v  = [index + stride, index + stride - 1, index - 1, index - stride - 1 ]
-                            .into_iter()
-                            .rev()
-                            .map(|index| game_render_desc.bg_tiles[index].0)
-                            .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
-                            .map(|dep| (depth > dep) as u8)
-                            .reduce(|acc, bit| (acc << 1) | bit)
-                            .map(|out| (out << 2) as f32)
-                            .unwrap();
-
-                        bg_tile_xyz_data.extend_from_slice(&[
-                            GlVec3(x - 8., y - 8., z),
-                            GlVec3(x + 16. + 8., y - 8., z),
-                            GlVec3(x + 16. + 8., y + 16. + 8., z),
-                            GlVec3(x - 8., y + 16. + 8., z),
-                        ]);
-
-                        bg_tile_uv_data.extend_from_slice(&[
-                            GlVec2(u, v),
-                            GlVec2(u + 16., v),
-                            GlVec2(u + 16., v + 16.),
-                            GlVec2(u, v + 16.),
-                        ]);
-
-                        bg_tile_mask_uv_data.extend_from_slice(&[
-                            GlVec2(mask_u, mask_v),
-                            GlVec2(mask_u + 4., mask_v),
-                            GlVec2(mask_u + 4., mask_v + 4.),
-                            GlVec2(mask_u, mask_v + 4.),
-                        ]);
-                    }
-                }
+        // Upload background tile vertex data to GPU.
+        if bg_tile_count > 0 {
+            unsafe {
+                gl::BindBuffer(gl::ARRAY_BUFFER, self.bg_tile_vertices.0);
+                gl::BufferData(
+                    gl::ARRAY_BUFFER,
+                    (bg_tile_vertices.len() * size_of::<TileVertex>()) as isize,
+                    bg_tile_vertices.as_ptr() as *const c_void,
+                    gl::STATIC_DRAW,
+                );
             }
         }
 
+        // Upload foreground tile vertex data to GPU.
+        if fg_tile_count > 0 {
+            unsafe {
+                gl::BindBuffer(gl::ARRAY_BUFFER, self.fg_tile_vertices.0);
+                gl::BufferData(
+                    gl::ARRAY_BUFFER,
+                    (fg_tile_vertices.len() * size_of::<TileVertex>()) as isize,
+                    fg_tile_vertices.as_ptr() as *const c_void,
+                    gl::STATIC_DRAW,
+                );
+            }
+        }
+
+        // Clear.
         unsafe {
             gl::ClearColor(0., 0., 0., 1.);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-            let f32_size = size_of::<f32>() as i32;
+        }
 
-            // BG tile rendering.
-            if !bg_tile_xyz_data.is_empty() {
-                assert!(bg_tile_xyz_data.len() == bg_tile_uv_data.len());
-                assert!(bg_tile_uv_data.len() == bg_tile_mask_uv_data.len());
-
-                // Use program.
+        // Rendering background tiles.
+        if bg_tile_count > 0 {
+            unsafe {
                 gl::UseProgram(self.tile_program.0);
 
-                // Fill and attach tile xyz buffer.
-                gl::BindBuffer(gl::ARRAY_BUFFER, self.tile_xyz.0);
-                gl::BufferData(
-                    gl::ARRAY_BUFFER,
-                    (bg_tile_xyz_data.len() * size_of::<GlVec3>()) as isize,
-                    bg_tile_xyz_data.as_ptr() as *const c_void,
-                    gl::STATIC_DRAW,
-                );
-                gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, 3 * f32_size, std::ptr::null());
                 gl::EnableVertexAttribArray(0);
-
-                // Fill and attach tile_uv buffer.
-                gl::BindBuffer(gl::ARRAY_BUFFER, self.tile_uv.0);
-                gl::BufferData(
-                    gl::ARRAY_BUFFER,
-                    (bg_tile_uv_data.len() * size_of::<GlVec2>()) as isize,
-                    bg_tile_uv_data.as_ptr() as *const c_void,
-                    gl::STATIC_DRAW,
+                gl::VertexAttribFormat(
+                    0,
+                    3,
+                    gl::FLOAT,
+                    gl::FALSE,
+                    offset_of!(TileVertex, xyz) as u32,
                 );
-                gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, 2 * f32_size, std::ptr::null());
+                gl::BindVertexBuffer(
+                    0,
+                    self.bg_tile_vertices.0,
+                    0,
+                    size_of::<TileVertex>() as i32,
+                );
+
                 gl::EnableVertexAttribArray(1);
-
-                // File and attach tile_mask_uv buffer.
-                gl::BindBuffer(gl::ARRAY_BUFFER, self.tile_mask_uv.0);
-                gl::BufferData(
-                    gl::ARRAY_BUFFER,
-                    (bg_tile_mask_uv_data.len() * size_of::<GlVec2>()) as isize,
-                    bg_tile_mask_uv_data.as_ptr() as *const c_void,
-                    gl::STATIC_DRAW,
+                gl::VertexAttribFormat(
+                    1,
+                    2,
+                    gl::FLOAT,
+                    gl::FALSE,
+                    offset_of!(TileVertex, uv) as u32,
                 );
-                gl::VertexAttribPointer(2, 2, gl::FLOAT, gl::FALSE, 2 * f32_size, std::ptr::null());
+                gl::BindVertexBuffer(
+                    1,
+                    self.bg_tile_vertices.0,
+                    0,
+                    size_of::<TileVertex>() as i32,
+                );
+
                 gl::EnableVertexAttribArray(2);
+                gl::VertexAttribFormat(
+                    2,
+                    2,
+                    gl::FLOAT,
+                    gl::FALSE,
+                    offset_of!(TileVertex, mask_uv) as u32,
+                );
+                gl::BindVertexBuffer(
+                    2,
+                    self.bg_tile_vertices.0,
+                    0,
+                    size_of::<TileVertex>() as i32,
+                );
 
-                // Map textures to texture units.
                 gl::ActiveTexture(gl::TEXTURE0);
-                gl::BindTexture(gl::TEXTURE_2D, self.tile_texture.0);
+                gl::BindTexture(gl::TEXTURE_2D, self.textures["tile_sheet.png"].0);
                 gl::ActiveTexture(gl::TEXTURE1);
-                gl::BindTexture(gl::TEXTURE_2D, self.mask_texture.0);
+                gl::BindTexture(gl::TEXTURE_2D, self.tile_mask_texture.0);
 
-                // Attach uniforms.
                 gl::UniformMatrix3fv(0, 1, gl::FALSE, view_matrix.as_ptr());
                 gl::Uniform1i(1, 0);
                 gl::Uniform1i(2, 1);
                 gl::Uniform4f(3, 0.6, 0.6, 0.6, 1.0);
 
-                // Draw.
                 gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
                 gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.quad_ibo.0);
                 gl::PrimitiveRestartIndex(u16::MAX as u32);
+
                 gl::DrawElements(
                     gl::TRIANGLE_STRIP,
-                    bg_tile_xyz_data.len() as i32 / 4 * 5,
+                    bg_tile_count as i32 * 5,
                     gl::UNSIGNED_SHORT,
                     std::ptr::null(),
                 );
             }
+        }
 
-            // Sprite rendering.
-            let sprite_count = sprite_xyz_data.len();
-            if sprite_count > 0 {
-                assert_eq!(sprite_count, sprite_uv_data.len());
-                assert_eq!(sprite_count, sprite_rgb_data.len());
-
+        // Render sprites.
+        if sprite_count > 0 {
+            unsafe {
                 gl::UseProgram(self.sprite_program.0);
 
-                // Sprite xyz.
-                gl::BindBuffer(gl::ARRAY_BUFFER, self.sprite_xyz.0);
-                gl::BufferData(
-                    gl::ARRAY_BUFFER,
-                    (sprite_count * size_of::<GlVec3>()) as isize,
-                    sprite_xyz_data.as_ptr() as *const c_void,
-                    gl::STATIC_DRAW,
-                );
-                gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, 3 * f32_size, std::ptr::null());
                 gl::EnableVertexAttribArray(0);
-
-                // Sprite uv.
-                gl::BindBuffer(gl::ARRAY_BUFFER, self.sprite_uv.0);
-                gl::BufferData(
-                    gl::ARRAY_BUFFER,
-                    (sprite_count * size_of::<GlVec2>()) as isize,
-                    sprite_uv_data.as_ptr() as *const c_void,
-                    gl::STATIC_DRAW,
+                gl::VertexAttribFormat(
+                    0,
+                    2,
+                    gl::FLOAT,
+                    gl::FALSE,
+                    offset_of!(SpriteVertex, xy) as u32,
                 );
-                gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, 2 * f32_size, std::ptr::null());
+                gl::BindVertexBuffer(
+                    0,
+                    self.sprite_vertices.0,
+                    0,
+                    size_of::<SpriteVertex>() as i32,
+                );
+
                 gl::EnableVertexAttribArray(1);
-
-                // Sprite uv.
-                gl::BindBuffer(gl::ARRAY_BUFFER, self.sprite_rgb.0);
-                gl::BufferData(
-                    gl::ARRAY_BUFFER,
-                    (sprite_count * size_of::<GlVec3>()) as isize,
-                    sprite_rgb_data.as_ptr() as *const c_void,
-                    gl::STATIC_DRAW,
+                gl::VertexAttribFormat(
+                    1,
+                    2,
+                    gl::FLOAT,
+                    gl::FALSE,
+                    offset_of!(SpriteVertex, uv) as u32,
                 );
-                gl::VertexAttribPointer(2, 3, gl::FLOAT, gl::FALSE, 3 * f32_size, std::ptr::null());
-                gl::EnableVertexAttribArray(2);
+                gl::BindVertexBuffer(
+                    0,
+                    self.sprite_vertices.0,
+                    0,
+                    size_of::<SpriteVertex>() as i32,
+                );
 
                 // Attach uniforms.
                 let model_matrix = Mat3::identity();
@@ -667,108 +616,116 @@ impl GameRenderState {
                 gl::PrimitiveRestartIndex(u16::MAX as u32);
                 gl::DrawElements(
                     gl::TRIANGLE_STRIP,
-                    sprite_count as i32 / 4 * 5,
+                    sprite_count as i32 * 5,
                     gl::UNSIGNED_SHORT,
                     std::ptr::null(),
                 );
             }
+        }
 
-            // FG tile rendering.
-            if !fg_tile_xyz_data.is_empty() {
-                assert_eq!(fg_tile_xyz_data.len(), fg_tile_uv_data.len());
-                assert_eq!(fg_tile_xyz_data.len(), fg_tile_mask_uv_data.len());
-
-                // Use program.
+        // Render foreground tiles.
+        if fg_tile_count > 0 {
+            unsafe {
                 gl::UseProgram(self.tile_program.0);
 
-                // Fill and attach tile xyz buffer.
-                gl::BindBuffer(gl::ARRAY_BUFFER, self.tile_xyz.0);
-                gl::BufferData(
-                    gl::ARRAY_BUFFER,
-                    (fg_tile_xyz_data.len() * size_of::<GlVec3>()) as isize,
-                    fg_tile_xyz_data.as_ptr() as *const c_void,
-                    gl::STATIC_DRAW,
-                );
-                gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, 3 * f32_size, std::ptr::null());
                 gl::EnableVertexAttribArray(0);
-
-                // Fill and attach tile_uv buffer.
-                gl::BindBuffer(gl::ARRAY_BUFFER, self.tile_uv.0);
-                gl::BufferData(
-                    gl::ARRAY_BUFFER,
-                    (fg_tile_uv_data.len() * size_of::<GlVec2>()) as isize,
-                    fg_tile_uv_data.as_ptr() as *const c_void,
-                    gl::STATIC_DRAW,
+                gl::VertexAttribFormat(
+                    0,
+                    3,
+                    gl::FLOAT,
+                    gl::FALSE,
+                    offset_of!(TileVertex, xyz) as u32,
                 );
-                gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, 2 * f32_size, std::ptr::null());
+                gl::BindVertexBuffer(
+                    0,
+                    self.fg_tile_vertices.0,
+                    0,
+                    size_of::<TileVertex>() as i32,
+                );
+
                 gl::EnableVertexAttribArray(1);
-
-                // File and attach tile_mask_uv buffer.
-                gl::BindBuffer(gl::ARRAY_BUFFER, self.tile_mask_uv.0);
-                gl::BufferData(
-                    gl::ARRAY_BUFFER,
-                    (fg_tile_mask_uv_data.len() * size_of::<GlVec2>()) as isize,
-                    fg_tile_mask_uv_data.as_ptr() as *const c_void,
-                    gl::STATIC_DRAW,
+                gl::VertexAttribFormat(
+                    1,
+                    2,
+                    gl::FLOAT,
+                    gl::FALSE,
+                    offset_of!(TileVertex, uv) as u32,
                 );
-                gl::VertexAttribPointer(2, 2, gl::FLOAT, gl::FALSE, 2 * f32_size, std::ptr::null());
+                gl::BindVertexBuffer(
+                    1,
+                    self.fg_tile_vertices.0,
+                    0,
+                    size_of::<TileVertex>() as i32,
+                );
+
                 gl::EnableVertexAttribArray(2);
+                gl::VertexAttribFormat(
+                    2,
+                    2,
+                    gl::FLOAT,
+                    gl::FALSE,
+                    offset_of!(TileVertex, mask_uv) as u32,
+                );
+                gl::BindVertexBuffer(
+                    2,
+                    self.fg_tile_vertices.0,
+                    0,
+                    size_of::<TileVertex>() as i32,
+                );
 
-                // Map textures to texture units.
                 gl::ActiveTexture(gl::TEXTURE0);
-                gl::BindTexture(gl::TEXTURE_2D, self.tile_texture.0);
+                gl::BindTexture(gl::TEXTURE_2D, self.textures["tile_sheet.png"].0);
                 gl::ActiveTexture(gl::TEXTURE1);
-                gl::BindTexture(gl::TEXTURE_2D, self.mask_texture.0);
+                gl::BindTexture(gl::TEXTURE_2D, self.tile_mask_texture.0);
 
-                // Attach uniforms.
                 gl::UniformMatrix3fv(0, 1, gl::FALSE, view_matrix.as_ptr());
                 gl::Uniform1i(1, 0);
                 gl::Uniform1i(2, 1);
                 gl::Uniform4f(3, 1., 1., 1., 1.);
 
-                // Draw.
                 gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
                 gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.quad_ibo.0);
                 gl::PrimitiveRestartIndex(u16::MAX as u32);
+
                 gl::DrawElements(
                     gl::TRIANGLE_STRIP,
-                    fg_tile_xyz_data.len() as i32 / 4 * 5,
+                    fg_tile_count as i32 * 5,
                     gl::UNSIGNED_SHORT,
                     std::ptr::null(),
                 );
             }
+        }
 
-            // Light rendering.
-            {
-                // Use program.
-                gl::UseProgram(self.light_program.0);
+        // Render light map.
+        unsafe {
+            // Use program.
+            gl::UseProgram(self.light_program.0);
 
-                // Map textures to texture units.
-                gl::ActiveTexture(gl::TEXTURE0);
-                gl::BindTexture(gl::TEXTURE_2D, self.light_texture.0);
+            // Map textures to texture units.
+            gl::ActiveTexture(gl::TEXTURE0);
+            gl::BindTexture(gl::TEXTURE_2D, self.light_texture.0);
 
-                // Attach uniforms.
-                gl::UniformMatrix3fv(0, 1, gl::FALSE, view_matrix.as_ptr());
-                gl::Uniform4f(
-                    1,
-                    game_render_desc.light_x as f32 * 16.,
-                    game_render_desc.light_y as f32 * 16.,
-                    game_render_desc.light_w as f32 * 16.,
-                    game_render_desc.light_h as f32 * 16.,
-                );
-                gl::Uniform2f(
-                    2,
-                    game_render_desc.light_w as f32,
-                    game_render_desc.light_h as f32,
-                );
-                gl::Uniform1i(3, 0);
+            // Attach uniforms.
+            gl::UniformMatrix3fv(0, 1, gl::FALSE, view_matrix.as_ptr());
+            gl::Uniform4f(
+                1,
+                game_render_desc.light_x as f32 * 16.,
+                game_render_desc.light_y as f32 * 16.,
+                game_render_desc.light_w as f32 * 16.,
+                game_render_desc.light_h as f32 * 16.,
+            );
+            gl::Uniform2f(
+                2,
+                game_render_desc.light_w as f32,
+                game_render_desc.light_h as f32,
+            );
+            gl::Uniform1i(3, 0);
 
-                // Draw.
-                gl::BlendFunc(gl::DST_COLOR, gl::ZERO);
-                gl::BlendEquation(gl::FUNC_ADD);
-                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.quad_ibo.0);
-                gl::DrawElements(gl::TRIANGLE_STRIP, 4, gl::UNSIGNED_SHORT, std::ptr::null());
-            }
+            // Draw.
+            gl::BlendFunc(gl::DST_COLOR, gl::ZERO);
+            gl::BlendEquation(gl::FUNC_ADD);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.quad_ibo.0);
+            gl::DrawElements(gl::TRIANGLE_STRIP, 4, gl::UNSIGNED_SHORT, std::ptr::null());
         }
 
         self.surface.swap_buffers(&self.context).unwrap();
@@ -779,7 +736,7 @@ pub fn gl_create_context(window: &Window) -> (NotCurrentContext, Surface<WindowS
     // Create context from window.
     let rwh = window.window.window_handle().ok().map(|wh| wh.as_raw());
     let context_attributes = ContextAttributesBuilder::default()
-        .with_context_api(ContextApi::OpenGl(Some(Version::new(3, 3))))
+        .with_context_api(ContextApi::OpenGl(Some(Version::new(4, 3))))
         .build(rwh);
     let gl_display = window.gl_config.display();
     let context = unsafe {
@@ -801,12 +758,158 @@ pub fn gl_create_context(window: &Window) -> (NotCurrentContext, Surface<WindowS
             .unwrap()
     };
 
-    unsafe {
-        gl::load_with(|s| {
-            let s = std::ffi::CString::new(s).unwrap();
-            surface.display().get_proc_address(s.as_c_str()).cast()
-        });
-    }
+    gl::load_with(|s| {
+        let s = std::ffi::CString::new(s).unwrap();
+        surface.display().get_proc_address(s.as_c_str()).cast()
+    });
 
     (context, surface)
+}
+
+fn generate_tile_data(game_render_desc: &GameRenderDesc) -> (Vec<TileVertex>, Vec<TileVertex>) {
+    let max_tiles = (game_render_desc.tiles_w - 2) * (game_render_desc.tiles_h - 2);
+    let mut fg_tile_vertices: Vec<TileVertex> = Vec::with_capacity(4 * max_tiles);
+    let mut bg_tile_vertices: Vec<TileVertex> = Vec::with_capacity(4 * max_tiles);
+
+    // Calculate tile data and upload to GPU.
+    let tile_texture_properties_lookup = &crate::shared::tile::TILE_TEXTURE_PROPERTIES;
+    let stride = game_render_desc.tiles_w;
+    for y in 1..game_render_desc.tiles_h - 1 {
+        for x in 1..game_render_desc.tiles_w - 1 {
+            let tile_size_f32 = TILE_SIZE as f32;
+            let index = x + y * game_render_desc.tiles_w;
+
+            // Skip FG if tile is None.
+            if !matches!(game_render_desc.fg_tiles[index].0, TileKind::None) {
+                // Get tile properties.
+                let tile_texture_properties =
+                    tile_texture_properties_lookup[game_render_desc.fg_tiles[index].0 as usize];
+
+                // Get texture UV.
+                let u = tile_texture_properties.u;
+                let v = tile_texture_properties.v;
+
+                // Get depth.
+                let depth = tile_texture_properties.depth;
+
+                // Calculate position.
+                let x = tile_size_f32 * (x + game_render_desc.tiles_x) as f32;
+                let y = tile_size_f32 * (y + game_render_desc.tiles_y) as f32;
+                let z = depth as f32;
+
+                // Calculate mask UV.
+                #[rustfmt::skip]
+                        let mask_u = [ index - stride, index - stride + 1, index + 1, index + stride + 1 ]
+                            .into_iter()
+                            .rev()
+                            .map(|index| game_render_desc.fg_tiles[index].0)
+                            .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
+                            .map(|dep| (depth > dep) as u8)
+                            .reduce(|acc, bit| (acc << 1) | bit)
+                            .map(|out| (out << 2) as f32)
+                            .unwrap();
+                #[rustfmt::skip]
+                        let mask_v  = [index + stride, index + stride - 1, index - 1, index - stride - 1 ]
+                            .into_iter()
+                            .rev()
+                            .map(|index| game_render_desc.fg_tiles[index].0)
+                            .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
+                            .map(|dep| (depth > dep) as u8)
+                            .reduce(|acc, bit| (acc << 1) | bit)
+                            .map(|out| (out << 2) as f32)
+                            .unwrap();
+
+                fg_tile_vertices.extend_from_slice(&[
+                    TileVertex {
+                        xyz: GlVec3(x - 8., y - 8., z),
+                        uv: GlVec2(u, v),
+                        mask_uv: GlVec2(mask_u, mask_v),
+                    },
+                    TileVertex {
+                        xyz: GlVec3(x + tile_size_f32 + 8., y - 8., z),
+                        uv: GlVec2(u + tile_size_f32, v),
+                        mask_uv: GlVec2(mask_u + 4., mask_v),
+                    },
+                    TileVertex {
+                        xyz: GlVec3(x + tile_size_f32 + 8., y + tile_size_f32 + 8., z),
+                        uv: GlVec2(u + tile_size_f32, v + tile_size_f32),
+                        mask_uv: GlVec2(mask_u + 4., mask_v + 4.),
+                    },
+                    TileVertex {
+                        xyz: GlVec3(x - 8., y + tile_size_f32 + 8., z),
+                        uv: GlVec2(u, v + tile_size_f32),
+                        mask_uv: GlVec2(mask_u, mask_v + 4.),
+                    },
+                ]);
+
+                // Skip check bg tile.
+                continue;
+            }
+
+            // Skip BG if tile is None.
+            if !matches!(game_render_desc.bg_tiles[index].0, TileKind::None) {
+                let tile_texture_properties =
+                    tile_texture_properties_lookup[game_render_desc.bg_tiles[index].0 as usize];
+
+                // Get texture UV.
+                let u = tile_texture_properties.u;
+                let v = tile_texture_properties.v;
+
+                // Get depth.
+                let depth = tile_texture_properties.depth;
+
+                // Calculate position.
+                let x = tile_size_f32 * (x + game_render_desc.tiles_x) as f32;
+                let y = tile_size_f32 * (y + game_render_desc.tiles_y) as f32;
+                let z = depth as f32;
+
+                // Calculate mask UV.
+                #[rustfmt::skip]
+                        let mask_u = [ index - stride, index - stride + 1, index + 1, index + stride + 1 ]
+                            .into_iter()
+                            .rev()
+                            .map(|index| game_render_desc.bg_tiles[index].0)
+                            .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
+                            .map(|dep| (depth > dep) as u8)
+                            .reduce(|acc, bit| (acc << 1) | bit)
+                            .map(|out| (out << 2) as f32)
+                            .unwrap();
+                #[rustfmt::skip]
+                        let mask_v  = [index + stride, index + stride - 1, index - 1, index - stride - 1 ]
+                            .into_iter()
+                            .rev()
+                            .map(|index| game_render_desc.bg_tiles[index].0)
+                            .map(|tile| tile_texture_properties_lookup[tile as usize].depth)
+                            .map(|dep| (depth > dep) as u8)
+                            .reduce(|acc, bit| (acc << 1) | bit)
+                            .map(|out| (out << 2) as f32)
+                            .unwrap();
+
+                bg_tile_vertices.extend_from_slice(&[
+                    TileVertex {
+                        xyz: GlVec3(x - 8., y - 8., z),
+                        uv: GlVec2(u, v),
+                        mask_uv: GlVec2(mask_u, mask_v),
+                    },
+                    TileVertex {
+                        xyz: GlVec3(x + tile_size_f32 + 8., y - 8., z),
+                        uv: GlVec2(u + tile_size_f32, v),
+                        mask_uv: GlVec2(mask_u + 4., mask_v),
+                    },
+                    TileVertex {
+                        xyz: GlVec3(x + tile_size_f32 + 8., y + tile_size_f32 + 8., z),
+                        uv: GlVec2(u + tile_size_f32, v + tile_size_f32),
+                        mask_uv: GlVec2(mask_u + 4., mask_v + 4.),
+                    },
+                    TileVertex {
+                        xyz: GlVec3(x - 8., y + tile_size_f32 + 8., z),
+                        uv: GlVec2(u, v + tile_size_f32),
+                        mask_uv: GlVec2(mask_u, mask_v + 4.),
+                    },
+                ]);
+            }
+        }
+    }
+
+    (fg_tile_vertices, bg_tile_vertices)
 }

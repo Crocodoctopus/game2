@@ -1,8 +1,8 @@
+use crate::shared::GlobalId;
 use crate::shared::misc::Aabb;
 use crate::shared::physics::*;
 use crate::shared::tile::*;
 use crate::shared::tile_collision::*;
-use crate::shared::GlobalId;
 use bitcode::{Decode, Encode};
 use std::collections::HashMap;
 

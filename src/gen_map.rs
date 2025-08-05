@@ -1,5 +1,3 @@
-
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Handle(u16, u16);
 

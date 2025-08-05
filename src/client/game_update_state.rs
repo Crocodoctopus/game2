@@ -264,7 +264,15 @@ impl GameUpdateState {
 
     pub fn poststep(&mut self, _timestamp: u64) -> GameRenderDesc {
         // Send the server RequestChunk messages based on view.
-        request_chunks_from_server(self);
+        request_chunks_from_server(
+            self.viewport_x,
+            self.viewport_y,
+            self.viewport_w,
+            self.viewport_h,
+            self.fg_tiles.width(),
+            &mut self.chunks_loaded,
+            &self.net_manager,
+        );
 
         // Send the server the player's current state.
         if let Some(player) = self.humanoids.get(&self.player_id) {
@@ -280,7 +288,14 @@ impl GameUpdateState {
         assert!(r.height() == g.height() && g.height() == b.height());
 
         // Clone the tiles in the visible range (plus 1).
-        let (tiles_x, tiles_y, tiles_w, tiles_h, fg_tiles, bg_tiles) = clone_visible_tile_map(self);
+        let (tiles_x, tiles_y, tiles_w, tiles_h, fg_tiles, bg_tiles) = clone_visible_tile_map(
+            self.viewport_x,
+            self.viewport_y,
+            self.viewport_w,
+            self.viewport_h,
+            &self.fg_tiles,
+            &self.bg_tiles,
+        );
 
         // Poll the network to send all messages.
         self.net_manager.poll();
@@ -293,7 +308,7 @@ impl GameUpdateState {
             viewport_h: self.viewport_h as f32,
 
             items: clone_visible_items(self),
-            sprites: clone_visible_sprites(self),
+            humanoids: clone_visible_humanoids(self),
 
             light_x,
             light_y,
@@ -409,6 +424,7 @@ impl GameUpdateState {
     ) -> bool {
         for e in input_events {
             use crate::window::*;
+            //println!("{:?}", e);
             match e {
                 InputEvent::WindowClose => return true,
                 InputEvent::WindowResize { width, height } => {
@@ -453,6 +469,10 @@ impl GameUpdateState {
                 }
 
                 InputEvent::MouseMove { x, y } => {
+                    // Mouse relatives don't make sense with no window size.
+                    if self.window_width == 0 || self.window_height == 0 {
+                        break;
+                    }
                     let (x, y) = (x / self.window_width as f32, y / self.window_height as f32);
                     self.mouse_x_rel = (x * self.viewport_w as f32) as usize;
                     self.mouse_y_rel = (y * self.viewport_h as f32) as usize;
@@ -484,21 +504,29 @@ impl GameUpdateState {
     }
 }
 
-fn request_chunks_from_server(game: &mut GameUpdateState) {
+fn request_chunks_from_server(
+    viewport_x: usize,
+    viewport_y: usize,
+    viewport_w: usize,
+    viewport_h: usize,
+    world_w: usize,
+    chunks_loaded: &mut Box<[bool]>,
+    net_manager: &ClientNetManager,
+) {
     const TILE_CHUNK_SIZE: usize = TILE_SIZE * CHUNK_SIZE;
-    let cx = game.viewport_x + game.viewport_w / 2;
-    let cy = game.viewport_y + game.viewport_h / 2;
-    let x1 = ((cx.saturating_sub(game.viewport_w / 2)) / TILE_CHUNK_SIZE).saturating_sub(3);
-    let x2 = (cx + game.viewport_w / 2).div_ceil(TILE_CHUNK_SIZE) + 3;
-    let y1 = ((cy.saturating_sub(game.viewport_h / 2)) / TILE_CHUNK_SIZE).saturating_sub(3);
-    let y2 = (cy + game.viewport_h / 2).div_ceil(TILE_CHUNK_SIZE) + 3;
+    let cx = viewport_x + viewport_w / 2;
+    let cy = viewport_y + viewport_h / 2;
+    let x1 = ((cx.saturating_sub(viewport_w / 2)) / TILE_CHUNK_SIZE).saturating_sub(3);
+    let x2 = (cx + viewport_w / 2).div_ceil(TILE_CHUNK_SIZE) + 3;
+    let y1 = ((cy.saturating_sub(viewport_h / 2)) / TILE_CHUNK_SIZE).saturating_sub(3);
+    let y2 = (cy + viewport_h / 2).div_ceil(TILE_CHUNK_SIZE) + 3;
 
     let mut msgs = vec![];
     for y in y1..y2 {
         for x in x1..x2 {
-            let index = x + y * game.fg_tiles.width() / CHUNK_SIZE;
-            if !game.chunks_loaded[index] {
-                game.chunks_loaded[index] = true;
+            let index = x + y * world_w / CHUNK_SIZE;
+            if !chunks_loaded[index] {
+                chunks_loaded[index] = true;
                 msgs.push(ClientNetMessage::RequestChunk {
                     x: x as u16,
                     y: y as u16,
@@ -510,7 +538,7 @@ fn request_chunks_from_server(game: &mut GameUpdateState) {
     if !msgs.is_empty() {
         log!("Requested {} chunks from server.", msgs.len());
         let _bytes = serialize(&msgs);
-        game.net_manager.send_ru(serialize(&msgs));
+        net_manager.send_ru(serialize(&msgs));
     }
 }
 
@@ -592,7 +620,12 @@ fn calculate_light_map(game: &mut GameUpdateState) -> (usize, usize, Lightmap, L
 }
 
 fn clone_visible_tile_map(
-    game: &mut GameUpdateState,
+    viewport_x: usize,
+    viewport_y: usize,
+    viewport_w: usize,
+    viewport_h: usize,
+    fg_tiles: &TileMap,
+    bg_tiles: &TileMap,
 ) -> (
     usize,
     usize,
@@ -601,25 +634,25 @@ fn clone_visible_tile_map(
     Box<[TileRenderDesc]>,
     Box<[TileRenderDesc]>,
 ) {
-    let x1 = (game.viewport_x - 4) / 16 - 1;
-    let y1 = (game.viewport_y - 4) / 16 - 1;
-    let x2 = (game.viewport_x + game.viewport_w + 4 + 15) / 16 + 1;
-    let y2 = (game.viewport_y + game.viewport_h + 4 + 15) / 16 + 1;
-    let mut fg_tiles =
+    let x1 = (viewport_x - 4) / 16 - 1;
+    let y1 = (viewport_y - 4) / 16 - 1;
+    let x2 = (viewport_x + viewport_w + 4 + 15) / 16 + 1;
+    let y2 = (viewport_y + viewport_h + 4 + 15) / 16 + 1;
+    let mut mapped_fg_tiles =
         vec![TileRenderDesc(TileKind::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
-    let mut bg_tiles =
+    let mut mapped_bg_tiles =
         vec![TileRenderDesc(TileKind::None); (x2 - x1) * (y2 - y1)].into_boxed_slice();
     let w = x2 - x1;
     let h = y2 - y1;
     for y in 0..h {
         for x in 0..w {
-            let src_index = (x + x1) + (y + y1) * game.fg_tiles.width();
+            let src_index = (x + x1) + (y + y1) * fg_tiles.width();
             let dst_index = x + y * w;
-            fg_tiles[dst_index] = TileRenderDesc(game.fg_tiles[src_index]);
-            bg_tiles[dst_index] = TileRenderDesc(game.bg_tiles[src_index]);
+            mapped_fg_tiles[dst_index] = TileRenderDesc(fg_tiles[src_index]);
+            mapped_bg_tiles[dst_index] = TileRenderDesc(bg_tiles[src_index]);
         }
     }
-    (x1, y1, x2 - x1, y2 - y1, fg_tiles, bg_tiles)
+    (x1, y1, x2 - x1, y2 - y1, mapped_fg_tiles, mapped_bg_tiles)
 }
 
 fn clone_visible_items(game: &mut GameUpdateState) -> Box<[ItemRenderDesc]> {
@@ -633,10 +666,10 @@ fn clone_visible_items(game: &mut GameUpdateState) -> Box<[ItemRenderDesc]> {
         .collect()
 }
 
-fn clone_visible_sprites(game: &mut GameUpdateState) -> Box<[SpriteRenderDesc]> {
+fn clone_visible_humanoids(game: &mut GameUpdateState) -> Box<[HumanoidRenderDesc]> {
     game.humanoids
         .values()
-        .map(|humanoid| SpriteRenderDesc {
+        .map(|humanoid| HumanoidRenderDesc {
             x: humanoid.bounds.x.floor(),
             y: humanoid.bounds.y.floor(),
             w: humanoid.bounds.width,

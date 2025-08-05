@@ -7,11 +7,14 @@ in vec2 frag_uv;
 out vec4 rgba;
 
 float light_func(float i) {
-    if (i == 0) {
+    if (i <= 0.00) {
         return 0.0;
     }
-    return pow(0.92, 40. - i);
+    //return pow(0.85, 40. - i);
+    float cutoff = 0.94;
+    return (pow(cutoff, 40. - i) - pow(cutoff, 40.)) / (pow(cutoff, 0) - pow(cutoff, 40)); 
 }
+
 
 void main() {
     vec2 coord = frag_uv;
