@@ -416,6 +416,36 @@ impl GameRenderState {
         }
         let sprite_count = sprite_vertices.len() / 4;
 
+        // This is a bit of a hack, but I'm going to hijack sprite rendering for items too.
+        // Generate sprites for Items.
+        for &ItemRenderDesc { x, y, kind } in &game_render_desc.items {
+            let (w, h, u, v) = match kind {
+                ItemKind::Tile(_tile) => (TILE_SIZE as f32, TILE_SIZE as f32, 0., 0.),
+                #[allow(unreachable_patterns)]
+                _ => unimplemented!(),
+            };
+
+            sprite_vertices.extend_from_slice(&[
+                SpriteVertex {
+                    xy: GlVec3(x, y, 0.),
+                    uv: GlVec2(u, v),
+                },
+                SpriteVertex {
+                    xy: GlVec3(x + w, y, 0.),
+                    uv: GlVec2(u + w, v),
+                },
+                SpriteVertex {
+                    xy: GlVec3(x + w, y + h, 0.),
+                    uv: GlVec2(u + w, v + h),
+                },
+                SpriteVertex {
+                    xy: GlVec3(x, y + h, 0.),
+                    uv: GlVec2(u, v + h),
+                },
+            ]);
+        }
+        let sprite_count = sprite_vertices.len() / 4;
+
         // Upload sprite data to GPU.
         if sprite_count > 0 {
             unsafe {
@@ -428,37 +458,6 @@ impl GameRenderState {
                 );
             }
         }
-
-        // Generate sprites for Items.
-        /*for &ItemRenderDesc { x, y, kind } in &game_render_desc.items {
-            let (w, h, u, v) = match kind {
-                ItemKind::Tile(_tile) => (TILE_SIZE as f32, TILE_SIZE as f32, 0., 0.),
-                #[allow(unreachable_patterns)]
-                _ => unimplemented!(),
-            };
-
-            sprite_data
-                .entry("default")
-                .or_default()
-                .extend_from_slice(&[
-                    SpriteVertex {
-                        xy: GlVec3(x, y, 0.),
-                        uv: GlVec2(u, v),
-                    },
-                    SpriteVertex {
-                        xy: GlVec3(x + w, y, 0.),
-                        uv: GlVec2(u + w, v),
-                    },
-                    SpriteVertex {
-                        xy: GlVec3(x + w, y + h, 0.),
-                        uv: GlVec2(u + w, v + h),
-                    },
-                    SpriteVertex {
-                        xy: GlVec3(x, y + h, 0.),
-                        uv: GlVec2(u, v + h),
-                    },
-                ]);
-        }*/
 
         // Generate tile vertex data from game render descriptor.
         let (fg_tile_vertices, bg_tile_vertices) = generate_tile_data(game_render_desc);

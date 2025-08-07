@@ -13,6 +13,7 @@ pub const CHUNK_AREA: usize = CHUNK_SIZE * CHUNK_SIZE;
 pub const CHUNK_LOAD_WIDTH: usize = 10;
 pub const CHUNK_LOAD_HEIGHT: usize = 6;
 
+#[derive(Debug, Clone)]
 pub struct TileMap {
     width: usize,
     height: usize,
@@ -32,10 +33,14 @@ impl std::ops::IndexMut<usize> for TileMap {
     }
 }
 
-impl std::ops::Index<(usize, usize)> for TileMap {
+impl<A, B> std::ops::Index<(A, B)> for TileMap
+where
+    A: Into<usize>,
+    B: Into<usize>,
+{
     type Output = TileKind;
-    fn index(&self, (x, y): (usize, usize)) -> &Self::Output {
-        &self.data[x + y * self.width]
+    fn index(&self, (x, y): (A, B)) -> &Self::Output {
+        &self.data[x.into() + y.into() * self.width]
     }
 }
 

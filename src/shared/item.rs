@@ -35,6 +35,7 @@ impl ItemKind {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Item {
     pub bounds: Aabb,
     pub last_x: f32,
@@ -45,6 +46,34 @@ pub struct Item {
     pub count: u8,
 }
 
+impl Item {
+    pub fn from_tile(
+        x: impl Into<usize> + Copy,
+        y: impl Into<usize> + Copy,
+        tile_kind: TileKind,
+    ) -> Self {
+        Item {
+            bounds: Aabb {
+                x: (x.into() * TILE_SIZE) as f32,
+                y: (y.into() * TILE_SIZE) as f32,
+                width: 16.,
+                height: 16.,
+            },
+            last_x: (x.into() * TILE_SIZE) as f32,
+            last_y: (y.into() * TILE_SIZE) as f32,
+            physics: GenericPhysics {
+                dx: 0.,
+                dy: -150.,
+                ddx: 0.,
+                ddy: 0.,
+            },
+            flags: 0,
+            kind: ItemKind::Tile(tile_kind),
+            count: 1,
+        }
+    }
+}
+
 pub fn update_item_physics(items: &mut HashMap<GlobalId, Item>, ft: f32, tiles: &TileMap) {
     for item in items.values_mut() {
         // X physics.
@@ -53,8 +82,14 @@ pub fn update_item_physics(items: &mut HashMap<GlobalId, Item>, ft: f32, tiles: 
         item.physics.ddx = 0.;
 
         // Apply friction.
-        if item.flags & tile_collision_flags::HIT_FLOOR > 0 {
-            item.physics.ddx = -item.physics.dx.signum() * 500.;
+        /*if item.flags & tile_collision_flags::HIT_FLOOR > 0*/
+        {
+            // If acceleration is high enough, apply deceleration, otherwise stop all movement.
+            if item.physics.dx.abs() > 0.1 {
+                item.physics.ddx = item.physics.dx.signum() * -500.;
+            } else {
+                item.physics.dx = 0.;
+            }
         }
 
         // Y physics.

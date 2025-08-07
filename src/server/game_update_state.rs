@@ -9,9 +9,13 @@ use crate::shared::physics::*;
 use crate::shared::tile::*;
 use crate::shared::tile_collision::*;
 use crate::shared::tile_damage::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::Path;
+
+fn default<T: Default>() -> T {
+    T::default()
+}
 
 pub struct Connection {
     // Whether the client has joined yet.
@@ -37,6 +41,8 @@ pub struct GameUpdateState {
     fg_tiles: TileMap,
     bg_tiles: TileMap,
     tile_damages: HashMap<(u16, u16), TileDamage>,
+    dirty_fg_tiles: HashSet<(u16, u16)>,
+    dirty_bg_tiles: HashSet<(u16, u16)>,
 
     // Players.
     humanoids: HashMap<GlobalId, Humanoid>,
@@ -128,6 +134,8 @@ impl GameUpdateState {
             fg_tiles: TileMap::from_data(world_w, world_h, fg_tiles),
             bg_tiles: TileMap::from_data(world_w, world_h, bg_tiles),
             tile_damages: <_>::default(),
+            dirty_fg_tiles: <_>::default(),
+            dirty_bg_tiles: <_>::default(),
 
             humanoids,
 
@@ -157,59 +165,19 @@ impl GameUpdateState {
         let destroyed_tiles = update_tile_damages(&mut self.tile_damages, timestamp);
 
         // Spawn items from destroyed tiles.
-        for (x, y) in &destroyed_tiles {
-            let (x, y) = (*x as usize, *y as usize);
-            let stride = self.fg_tiles.width();
-            self.items.insert(
-                self.id_counter.next(),
-                Item {
-                    bounds: Aabb {
-                        x: (x * TILE_SIZE) as f32,
-                        y: (y * TILE_SIZE) as f32,
-                        width: 16.,
-                        height: 16.,
-                    },
-                    last_x: (x * TILE_SIZE) as f32,
-                    last_y: (y * TILE_SIZE) as f32,
-                    physics: GenericPhysics {
-                        dx: 0.,
-                        dy: 0.,
-                        ddx: 0.,
-                        ddy: 0.,
-                    },
-                    flags: 0,
-                    kind: ItemKind::Tile(self.fg_tiles[x + y * stride]),
-                    count: 1,
-                },
-            );
+        for &(x, y) in &destroyed_tiles {
+            let mut item = Item::from_tile(x, y, self.fg_tiles[(x, y)]);
+            item.physics.dy = -150.;
+            self.items.insert(self.id_counter.next(), item);
+        }
+
+        // Mark destroyed tiles as dirty.
+        for &(x, y) in &destroyed_tiles {
+            self.dirty_fg_tiles.insert((x, y));
         }
 
         //
         update_item_physics(&mut self.items, frametime, &self.fg_tiles);
-
-        // Temp tile sync stuff
-        {
-            // Temp
-            let tiles_se = serialize(
-                &destroyed_tiles
-                    .into_iter()
-                    .map(|(x, y)| {
-                        let index = x as usize + y as usize * self.fg_tiles.width();
-                        self.fg_tiles[index] = TileKind::None;
-                        ServerNetMessage::TileSync {
-                            x,
-                            y,
-                            tile: TileKind::None,
-                        }
-                    })
-                    .collect::<Box<[_]>>(),
-            );
-
-            // Deff temp
-            for (destination, _) in self.connections.iter() {
-                self.net_manager.send_ru(destination, tiles_se.clone())
-            }
-        }
     }
 
     pub fn poststep(&mut self, _timestamp: u64) {
@@ -238,16 +206,34 @@ impl GameUpdateState {
                 .collect(),
         }]);
 
+        let dirty_fg_tiles = std::mem::take(&mut self.dirty_fg_tiles);
+        let fg_tiles_se = serialize(
+            &dirty_fg_tiles
+                .into_iter()
+                .map(|(x, y)| {
+                    let index = x as usize + y as usize * self.fg_tiles.width();
+                    self.fg_tiles[index] = TileKind::None;
+                    ServerNetMessage::TileSync {
+                        x,
+                        y,
+                        tile: TileKind::None,
+                    }
+                })
+                .collect::<Box<[_]>>(),
+        );
+
         // Da big sink
         for (destination, connection) in self.connections.iter() {
             if connection.disconnect {
-                //self.net_manager.send_uu()
+                // Send disconnect packet?
                 continue;
             }
 
             if !connection.joined {
                 continue;
             }
+
+            self.net_manager.send_ru(destination, fg_tiles_se.clone());
             self.net_manager.send_uu(destination, humanoid_se.clone());
             self.net_manager.send_uu(destination, items_se.clone());
         }

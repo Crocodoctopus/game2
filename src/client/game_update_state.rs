@@ -504,6 +504,46 @@ impl GameUpdateState {
     }
 }
 
+/*
+fn request_chunks_from_server2(
+    viewport: Aabb<usize>,
+    last_viewport: Aabb<usize>,
+    world_w: usize,
+    net_manager: &ClientNetManager,
+) {
+    // Generate a rectangle covering chunks visible from viewport.
+    const TILE_CHUNK_SIZE: usize = TILE_SIZE * CHUNK_SIZE;
+    let cx = viewport.x + viewport.width / 2;
+    let cy = viewport.y + viewport.height / 2;
+    let x1 = ((cx.saturating_sub(viewport.width / 2)) / TILE_CHUNK_SIZE).saturating_sub(3);
+    let x2 = (cx + viewport.width / 2).div_ceil(TILE_CHUNK_SIZE) + 3;
+    let y1 = ((cy.saturating_sub(viewport.height / 2)) / TILE_CHUNK_SIZE).saturating_sub(3);
+    let y2 = (cy + viewport.height / 2).div_ceil(TILE_CHUNK_SIZE) + 3;
+
+    // Repeat above, but for the last viewport.
+    let cx = last_viewport.x + last_viewport.width / 2;
+    let cy = last_viewport.y + last_viewport.height / 2;
+    let last_x1 =
+        ((cx.saturating_sub(last_viewport.width / 2)) / TILE_CHUNK_SIZE).saturating_sub(3);
+    let last_x2 = (cx + last_viewport.width / 2).div_ceil(TILE_CHUNK_SIZE) + 3;
+    let last_y1 =
+        ((cy.saturating_sub(last_viewport.height / 2)) / TILE_CHUNK_SIZE).saturating_sub(3);
+    let last_y2 = (cy + last_viewport.height / 2).div_ceil(TILE_CHUNK_SIZE) + 3;
+
+    // Loop each chunk in the current viewport, filtering out values that were in the last viewport.
+    let mut msgs = vec![];
+    for y in (y1..y2).filter(|y| y != y.max(&last_y1).min(&last_y2)) {
+        for x in (x1..x2).filter(|x| x != x.max(&last_x1).min(&last_x2)) {
+            // If the current x isn't in the AABB of the last viewport.
+            msgs.push(ClientNetMessage::RequestChunk {
+                x: x as u16,
+                y: y as u16,
+            });
+        }
+    }
+}
+*/
+
 fn request_chunks_from_server(
     viewport_x: usize,
     viewport_y: usize,
